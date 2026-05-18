@@ -1,6 +1,7 @@
 gt_results
 gt_results_mqt8_500
-gt_results_qt8_11x11
+gt_results_sf1_qt8_11x11_m0
+gt_results_sf1_qt8_10x10_m1
 data
 models
 notebooks

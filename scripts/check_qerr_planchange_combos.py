@@ -15,7 +15,7 @@ from config_gt import RESULTS_FILENAME
 CSV_PATH = Path(RESULTS_DIR) / RESULTS_FILENAME
 
 OUTPUT_DIR = Path(
-    "qerr_planchange_analysis"
+    RESULTS_DIR / "qerr_planchange_analysis"
 )
 
 OUTPUT_DIR.mkdir(exist_ok=True)

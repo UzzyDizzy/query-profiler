@@ -13,7 +13,6 @@ from pathlib import Path
 from decimal import Decimal
 from itertools import product
 from datetime import datetime, timedelta
-from connect_db import get_conn
 from config_gt import (
     ensure_paths,
     QUERY_SQL_PATH,
@@ -33,8 +32,13 @@ from config_gt import (
     get_resolution_map,
     query_name_from_path,
     get_db_metadata,
+    DATABASE_NAME,
+    USER,
+    HOST,
+    PASSWORD,
 )
 import re
+import psycopg2
 import psycopg2.sql as sql
 from tpch_query_parser import TPCHQueryParser
 
@@ -176,7 +180,15 @@ def json_serializer(obj):
 # Connect to tpch database
 # =========================================================
 
-conn = get_conn("tpchdb_sf10")
+def get_conn(dbname):
+    return psycopg2.connect(
+        dbname=dbname,
+        user=USER,
+        password=PASSWORD,
+        host=HOST,
+    )
+
+conn = get_conn(DATABASE_NAME)
 
 # FOR STABILITY
 setup_cur = conn.cursor()

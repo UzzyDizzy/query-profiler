@@ -1,8 +1,14 @@
 #config_gt.py
 from pathlib import Path
 
+# Database Configs
+DATABASE_NAME = "tpch"
+PASSWORD = "112358"
+USER = "postgres"
+HOST = "localhost"
+
 # Directory layout for ground truth artifacts
-RESULTS_DIR = Path("gt_results_sf10_qt8_10x10_m1")
+RESULTS_DIR = Path("gt_results_sf1_qt8_10x10_m1")
 PLANS_DIR = RESULTS_DIR / "plans"
 PLAN_TREES_DIR = RESULTS_DIR / "plan_trees"
 TRACES_DIR = RESULTS_DIR / "traces"
@@ -36,7 +42,7 @@ SAMPLING_METHOD = "selectivity_m1"
 
 # Linear value-spacing — works in any number of dimensions.
 NORMAL_RES = {
-    "default": 100,
+    "default": 10,
     # "p1": 100,
     # "p2": 100,
 }
