@@ -783,6 +783,25 @@ for combo in all_combinations:
 
     count_rows = combo_row_counts[combo]
 
+
+    runtimes = [r["runtime"] for r in temp_runs]
+    runtime_mean = np.mean(runtimes)
+    runtime_std = np.std(runtimes)
+
+    best_run = min(temp_runs, key=lambda r: abs(r["runtime"] - runtime_mean))
+    explain_data = best_run["explain"]
+
+    plan = explain_data["Plan"]
+    root_node = plan.get("Node Type")
+    startup_cost = plan.get("Startup Cost")
+    total_cost = plan.get("Total Cost")
+    plan_rows = plan.get("Plan Rows")
+    root_rows = int(plan.get("Actual Rows", 0))
+
+    if root_rows is None:
+        root_rows = 0
+    root_rows = int(float(root_rows))
+
     # =====================================================
     # Selectivity
     # =====================================================
@@ -799,25 +818,10 @@ for combo in all_combinations:
     # optimizer-visible selectivity
     # ----------------------------------------
 
-    effective_rows = max(root_rows,count_rows)
+    effective_rows = max(int(root_rows or 0),int(count_rows or 0))
 
-    selectivity2 = (effective_rows/max(total_relation_rows,1))
+    selectivity2 = (effective_rows/max(int(total_relation_rows),1))
     selectivity2_percent = (selectivity2*100)
-
-
-    runtimes = [r["runtime"] for r in temp_runs]
-    runtime_mean = np.mean(runtimes)
-    runtime_std = np.std(runtimes)
-
-    best_run = min(temp_runs, key=lambda r: abs(r["runtime"] - runtime_mean))
-    explain_data = best_run["explain"]
-
-    plan = explain_data["Plan"]
-    root_node = plan.get("Node Type")
-    startup_cost = plan.get("Startup Cost")
-    total_cost = plan.get("Total Cost")
-    plan_rows = plan.get("Plan Rows")
-    root_rows = int(plan.get("Actual Rows", 0))
 
     # =====================================================
     # DISTINCT mode: use actual executed cardinality
