@@ -107,6 +107,53 @@ for qcol in qcols:
         ]=row[pcol]
 
         # ---------------------------------
+        # Selectivity
+        # ---------------------------------
+
+        if "selectivity" in row:
+
+            instance[
+                "selectivity"
+            ] = row[
+                "selectivity"
+            ]
+
+        if "selectivity_percent" in row:
+
+            instance[
+                "selectivity_percent"
+            ] = row[
+                "selectivity_percent"
+            ]
+
+        # ---------------------------------
+        # useful runtime/cardinality info
+        # ---------------------------------
+
+        useful_cols=[
+
+            "runtime_mean",
+
+            "count_rows",
+
+            "execution_time",
+
+            "planning_time",
+
+            "root_rows",
+
+            "plan_rows",
+
+            "plan_hash"
+        ]
+
+        for c in useful_cols:
+
+            if c in row:
+
+                instance[c]=row[c]
+
+        # ---------------------------------
         # parameter coordinates
         # ---------------------------------
 

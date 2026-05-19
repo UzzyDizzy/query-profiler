@@ -381,6 +381,51 @@ print("Table aliases:", table_aliases)
 
 
 # =========================================================
+# Compute total base relation size for selectivity
+# =========================================================
+
+query_tables = sorted(
+    list(
+        set(
+            table_aliases.values()
+        )
+    )
+)
+
+total_relation_rows = 0
+
+cur = conn.cursor()
+
+for table in query_tables:
+
+    cur.execute(
+        f"SELECT COUNT(*) FROM {table}"
+    )
+
+    cnt = cur.fetchone()[0]
+
+    total_relation_rows += cnt
+
+cur.close()
+
+print()
+print("=================================================")
+print("SELECTIVITY INFO")
+print("=================================================")
+
+print(
+    f"Query tables: {query_tables}"
+)
+
+print(
+    f"Total rows across tables: "
+    f"{total_relation_rows:,}"
+)
+
+print("=================================================\n")
+
+
+# =========================================================
 # Safe parameter substitution
 # =========================================================
 
@@ -737,6 +782,21 @@ for combo in all_combinations:
         continue
 
     count_rows = combo_row_counts[combo]
+
+    # =====================================================
+    # Selectivity
+    # =====================================================
+
+    selectivity = (
+        count_rows
+        /
+        max(total_relation_rows,1)
+    )
+
+    selectivity_percent = (
+        selectivity * 100
+    )
+
     runtimes = [r["runtime"] for r in temp_runs]
     runtime_mean = np.mean(runtimes)
     runtime_std = np.std(runtimes)
@@ -840,6 +900,8 @@ for combo in all_combinations:
             "plan_signature": run_plan_signature,
             "plan_hash": run_plan_hash,
             "full_explain": run["explain"],
+            "selectivity": selectivity,
+            "selectivity_percent": selectivity_percent,
         })
 
     trace_path = TRACES_DIR / f"{combo_filename}_trace.json"
@@ -888,7 +950,9 @@ for combo in all_combinations:
         plan_hash,
         rel_plan_json_path,
         rel_plan_tree_path,
-        rel_trace_path
+        rel_trace_path,
+        selectivity,
+        selectivity_percent,
     ])
 
     print(f"Combo={combo} | runtime={runtime_mean:.4f} ms | plan_hash={plan_hash[:8]}... | plan={root_node}")
@@ -930,7 +994,9 @@ columns = [f"x{i+1}" for i in range(len(param_columns))] + [
     "plan_hash",
     "plan_json_path",
     "plan_tree_path",
-    "trace_path"
+    "trace_path",
+    "selectivity",
+    "selectivity_percent",
 ]
 
 df = pd.DataFrame(rows, columns=columns)
