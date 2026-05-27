@@ -34,6 +34,7 @@ if args.query:
 # ===========================================================
 
 import pandas as pd
+import bisect
 import numpy as np
 import time
 import json
@@ -328,6 +329,13 @@ def json_serializer(obj):
 
     except Exception:
         return str(obj)
+    
+# =========================================================
+# Selectivity cache
+# table.column -> sorted values
+# =========================================================
+
+SELECTIVITY_CACHE={}
 
 # =========================================================
 # Connect to tpch database
@@ -816,8 +824,43 @@ for CURRENT_METHOD in METHODS_TO_RUN:
             in sampler_name
         )
 
+    # # =========================================================
+    # # Helper for axis selectivity (LINEAR SEARCH)
+    # # =========================================================
+
+    # def get_axis_selectivity(
+    #     conn,
+    #     table,
+    #     column,
+    #     value
+    # ):
+
+    #     cur=conn.cursor()
+
+    #     cur.execute(
+    #         sql.SQL("""
+    #         SELECT
+    #             COUNT(*) FILTER(
+    #                 WHERE {col}<=%s
+    #             ),
+    #             COUNT(*)
+    #         FROM {tbl}
+    #         """).format(
+    #             col=sql.Identifier(column),
+    #             tbl=sql.Identifier(table)
+    #         ),
+    #         (value,)
+    #     )
+
+    #     matched,total=cur.fetchone()
+
+    #     cur.close()
+
+    #     return matched/max(total,1)
+
+
     # =========================================================
-    # Helper for Measuring actual selectivities
+    # Helper for axis selectivity (one scan+BINARY SEARCH)
     # =========================================================
 
     def get_axis_selectivity(
@@ -827,28 +870,80 @@ for CURRENT_METHOD in METHODS_TO_RUN:
         value
     ):
 
-        cur=conn.cursor()
-
-        cur.execute(
-            sql.SQL("""
-            SELECT
-                COUNT(*) FILTER(
-                    WHERE {col}<=%s
-                ),
-                COUNT(*)
-            FROM {tbl}
-            """).format(
-                col=sql.Identifier(column),
-                tbl=sql.Identifier(table)
-            ),
-            (value,)
+        cache_key=(
+            table,
+            column
         )
 
-        matched,total=cur.fetchone()
+        # ======================================
+        # Build cache once
+        # ======================================
 
-        cur.close()
+        if cache_key not in SELECTIVITY_CACHE:
 
-        return matched/max(total,1)
+            print(
+                f"\nCaching "
+                f"{table}.{column}"
+            )
+
+            cur=conn.cursor()
+
+            cur.execute(
+                f"""
+                SELECT {column}
+                FROM {table}
+                ORDER BY {column}
+                """
+            )
+
+            vals=[
+
+                r[0]
+
+                for r in cur.fetchall()
+
+                if r[0] is not None
+
+            ]
+
+            cur.close()
+
+            SELECTIVITY_CACHE[
+                cache_key
+            ]=vals
+
+            print(
+                f"Cached "
+                f"{len(vals):,}"
+                f" values"
+            )
+
+
+        vals=SELECTIVITY_CACHE[
+            cache_key
+        ]
+
+        total=len(vals)
+
+        if total==0:
+            return np.nan
+
+
+        # ======================================
+        # exact:
+        #
+        # P(X<=value)
+        # ======================================
+
+        idx=bisect.bisect_right(
+            vals,
+            value
+        )
+
+        sel=idx/total
+
+        return sel
+
 
     # =========================================================
     # Cache DISTINCT column values
@@ -999,7 +1094,7 @@ for CURRENT_METHOD in METHODS_TO_RUN:
             f"Too many combinations: {len(all_combinations)}"
         )
 
-    print(f"Total combinations to profile: {len(all_combinations)}")
+    print(f"\nTotal combinations to profile: {len(all_combinations)}")
 
     # =========================================================
     # Persistent cache for 3 runs per parameter combination
