@@ -180,7 +180,6 @@ def load_resume_state():
     f=get_resume_file()
 
     if not f.exists():
-
         return {
             "completed":[],
             "finished":False
@@ -861,12 +860,16 @@ for CURRENT_METHOD in METHODS_TO_RUN:
     # =========================================================
 
     param_values_dict={}
-
     actual_axis_selectivities={}
 
     use_targets=method_uses_target_selectivities(
         CURRENT_METHOD
     )
+
+    print()
+    print("="*50)
+    print("PARAMETER PREPARATION")
+    print("="*50)
 
     for param in param_columns:
 
@@ -883,6 +886,12 @@ for CURRENT_METHOD in METHODS_TO_RUN:
             DEFAULT_RESOLUTION
         )
 
+        print()
+        print(
+            f"[{param}] "
+            f"Sampling..."
+        )
+
         values=sampler.sample(
             conn,
             real_table,
@@ -890,9 +899,13 @@ for CURRENT_METHOD in METHODS_TO_RUN:
             resolution
         )
 
-        param_values_dict[
-            param
-        ]=values
+        param_values_dict[param]=values
+
+        print(
+            f"[{param}] "
+            f"{len(values)} samples "
+            f"[{values[0]} → {values[-1]}]"
+        )
 
 
         # ====================================
@@ -915,20 +928,25 @@ for CURRENT_METHOD in METHODS_TO_RUN:
                     f"for {param}"
                 )
 
-            actual_axis_selectivities[
-                param
-            ]=target_sels
-
-
-        # ====================================
-        # compute actual selectivities
-        # ====================================
+            print(
+                f"[{param}] "
+                f"Using target selectivities"
+            )
 
         else:
 
             actual_sels=[]
+            n=len(values)
 
-            for v in values:
+            print(
+                f"[{param}] "
+                f"Computing actual selectivities"
+            )
+
+            for i,v in enumerate(
+                    values,
+                    start=1
+            ):
 
                 s=get_axis_selectivity(
                     conn,
@@ -939,16 +957,29 @@ for CURRENT_METHOD in METHODS_TO_RUN:
 
                 actual_sels.append(s)
 
+                if (
+                    i%10==0
+                    or
+                    i==n
+                ):
+
+                    print(
+                        f"[{param}] "
+                        f"{i}/{n}"
+                    )
+
             actual_axis_selectivities[
                 param
             ]=actual_sels
 
 
-        print(
-            f"{param}: "
-            f"{len(values)} samples "
-            f"[{values[0]} → {values[-1]}]"
-        )
+    print()
+    print("="*50)
+    print(
+        "Parameter preparation complete"
+    )
+    print("="*50)
+        
 
     for i, col in enumerate(param_columns):
         print(f"Parameter [{col}] has {len(param_values_dict[col])} distinct values")
@@ -1104,7 +1135,7 @@ for CURRENT_METHOD in METHODS_TO_RUN:
         )
 
         if (
-            i % 100==0
+            i % 1000==0
             or
             i==total_combos
         ):

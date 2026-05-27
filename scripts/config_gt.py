@@ -39,7 +39,7 @@ METHOD_CONFIGS = {
     "m0":{
         "sampler":"sampler_data_m0",
         "resolution":{
-            "default":10,
+            "default":100,
             # "p1":100
         }
     },
@@ -47,7 +47,7 @@ METHOD_CONFIGS = {
     "m1":{
         "sampler":"sampler_selectivity_m1",
         "resolution":{
-            "default":10,
+            "default":100,
         }
     },
 
@@ -55,7 +55,7 @@ METHOD_CONFIGS = {
 
         "sampler":"sampler_selectivity_m2",
         "resolution":{
-            "default":10,
+            "default":100,
         }
     },
 
