@@ -13,44 +13,60 @@ from pathlib import Path
 from decimal import Decimal
 from itertools import product
 from datetime import datetime, timedelta
-from config_gt import (
-    ensure_paths,
-    QUERY_SQL_PATH,
-    RESULTS_DIR,
-    PLANS_DIR,
-    PLAN_TREES_DIR,
-    TRACES_DIR,
-    TOTAL_ROUNDS,
-    WARMUP_ROUND,
-    MEASURED_ROUNDS,
-    RESULTS_FILENAME,
-    METADATA_FILENAME,
-    COMPARATOR_MODULE,
-    PLAN_HASH_METHOD,
-    MAX_COMBINATIONS,
-    SAMPLING_METHOD,
-    get_resolution_map,
-    query_name_from_path,
-    get_db_metadata,
-    DATABASE_NAME,
-    USER,
-    HOST,
-    PASSWORD,
-)
+from importlib import import_module
+import importlib.util
+
+import config_gt
+
+# from config_gt import (
+#     config_gt.QUERY_SQL_PATH,
+#     config_gt.RESULTS_DIR,
+#     config_gt.PLANS_DIR,
+#     config_gt.PLAN_TREES_DIR,
+#     config_gt.TRACES_DIR,
+#     config_gt.TOTAL_ROUNDS,
+#     config_gt.WARMUP_ROUND,
+#     config_gt.MEASURED_ROUNDS,
+#     config_gt.RESULTS_FILENAME,
+#     config_gt.METADATA_FILENAME,
+#     config_gt.COMPARATOR_MODULE,
+#     config_gt.PLAN_HASH_METHOD,
+#     config_gt.MAX_COMBINATIONS,
+#     config_gt.SAMPLING_METHOD,
+#     config_gt.RUN_METHODS,
+#     config_gt.GLOBAL_PROCESSORS,
+#     config_gt.PER_METHOD_PROCESSORS,
+#     config_gt.get_resolution_map,
+#     config_gt.set_method_paths,
+#     config_gt.ensure_paths,
+#     config_gt.query_name_from_path,
+#     config_gt.get_db_metadata,
+#     config_gt.DATABASE_NAME,
+#     config_gt.USER,
+#     config_gt.HOST,
+#     config_gt.PASSWORD,
+#     config_gt.QUERY_CACHE,
+#     config_gt.SAMPLER_FILES,
+#     config_gt.get_active_methods,
+#     config_gt.config_gt.MAIN_DIR,
+# )
 import re
 import psycopg2
 import psycopg2.sql as sql
 from tpch_query_parser import TPCHQueryParser
+import importlib.util
 
-import sampler_normal
-import sampler_selectivity_m1
-import sampler_selectivity_m2
+# from samplers import (
+#     sampler_data_m0,
+#     sampler_selectivity_m1,
+#     sampler_selectivity_m2,
+# )
 
-SAMPLERS = {
-    "normal": sampler_normal,
-    "selectivity_m1": sampler_selectivity_m1,
-    "selectivity_m2": sampler_selectivity_m2,
-}
+# SAMPLERS = {
+#     "m0": sampler_data_m0,
+#     "m1": sampler_selectivity_m1,
+#     "m2": sampler_selectivity_m2,
+# }
 
 # Import comparator for plan hashing
 from automated_script.comparator import structural_hash, plan_tree_str
@@ -60,13 +76,61 @@ from automated_script.comparator import structural_hash, plan_tree_str
 # =====================================================
 #
 # The three sampling strategies live in dedicated modules
-# (sampler_normal, sampler_selectivity_m1,
+# (sampler_data_m0, sampler_selectivity_m1,
 # sampler_selectivity_m2). The active strategy is chosen
-# by SAMPLING_METHOD in config_gt.py.
+# by config_gt.SAMPLING_METHOD in config_gt.py.
+#
+# data_m0         – uniform resolution over the data space
+# selectivity_m1  – uniform resolution over the selectivity
+#                   space (percentile method).
+# selectivity_m2  – exponential resolution over the selectivity
+#                   space (geometric method).
 
-DEFAULT_RESOLUTION, PARAM_RESOLUTIONS = get_resolution_map()
-sampler = SAMPLERS[SAMPLING_METHOD]
-print(f"Sampler: {SAMPLING_METHOD} (default resolution={DEFAULT_RESOLUTION})")
+# ===================================================
+# Resolve methods to run
+# ===================================================
+
+METHODS_TO_RUN=config_gt.get_active_methods()
+
+# =====================================================
+# Helper for processing results
+# =====================================================
+
+def run_processor(name, processor_dir, arg):
+
+    processor_path=(
+        Path(__file__).resolve().parent
+        / processor_dir
+        / f"{name}.py"
+    )
+
+    if not processor_path.exists():
+        raise FileNotFoundError(
+            f"\nProcessor not found:\n"
+            f"{processor_path}"
+        )
+
+    spec=importlib.util.spec_from_file_location(
+        name,
+        processor_path
+    )
+
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"\nFailed loading processor:\n"
+            f"{processor_path}"
+        )
+
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    if hasattr(module,"run"):
+        module.run(arg)
+
+    else:
+        raise RuntimeError(
+            f"{name}.py missing run()"
+        )
 
 # =====================================================
 # Helper for Json Serialize
@@ -183,1258 +247,1634 @@ def json_serializer(obj):
 def get_conn(dbname):
     return psycopg2.connect(
         dbname=dbname,
-        user=USER,
-        password=PASSWORD,
-        host=HOST,
+        user=config_gt.USER,
+        password=config_gt.PASSWORD,
+        host=config_gt.HOST,
     )
 
-conn = get_conn(DATABASE_NAME)
-
-# FOR STABILITY
-setup_cur = conn.cursor()
-setup_cur.execute("SET jit = off;")
-setup_cur.execute("SET max_parallel_workers_per_gather = 0;")
-setup_cur.execute("SET track_io_timing = on;")
-setup_cur.execute("SET enable_partitionwise_join = off;")
-setup_cur.execute("SET enable_partitionwise_aggregate = off;")
-setup_cur.close()
 
 # =========================================================
-# Create output directories
-# =========================================================
-ensure_paths()
-
-print(f"Output directories ready:\n  {PLANS_DIR}\n  {PLAN_TREES_DIR}\n  {TRACES_DIR}")
-
-
-# =======================================================================================
-# CAPTURE EXECUTION START TIME
-script_start_wall = datetime.now()
-script_start_perf = time.time()
-
-print("\n=================================================")
-print("SCRIPT START")
-print("=================================================")
-print(f"Start Time : {script_start_wall.strftime('%Y-%m-%d %H:%M:%S')}")
-print("=================================================\n")
-# =======================================================================================
-
-
-# =========================================================
-# Helper functions for file storage
-# =========================================================
-def sanitize(v):
-    s = str(v)
-    s = s.replace("/", "_")
-    s = s.replace(":", "_")
-    s = s.replace(" ", "_")
-    s = s.replace(".", "p")
-    return s[:50]
-
-def make_combo_filename(combo):
-    """Convert combo tuple to filename string."""
-    return "_".join([
-        f"x{i+1}_{sanitize(v)}"
-        for i, v in enumerate(combo)
-    ])
-
-
-# =========================================================
-# Helper to Find largest intermediate cardinality
-# =========================================================
-def get_max_actual_rows(node):
-    rows = node.get("Actual Rows",0)
-
-    for child in node.get("Plans",[]):
-        rows = max(rows,get_max_actual_rows(child))
-
-    return rows
-
-# =========================================================
-# Create output directories
+# WHOLE SCRIPT TIMER
 # =========================================================
 
+whole_script_start_wall = datetime.now()
+whole_script_start_perf = time.time()
 
-def traverse_plan(node, depth=0):
-    ops = []
-    node_type = node.get("Node Type", "UNKNOWN")
-    ops.append(node_type)
-    max_depth = depth
 
-    join_count = 0
-    scan_count = 0
-    hash_count = 0
-    sort_count = 0
-    aggregate_count = 0
-    parallel_count = 0
+for CURRENT_METHOD in METHODS_TO_RUN:
+    CURRENT_METHOD=CURRENT_METHOD
 
-    if "Join" in node_type or node_type == "Nested Loop":
-        join_count += 1
-    if "Scan" in node_type:
-        scan_count += 1
-    if "Hash" in node_type:
-        hash_count += 1
-    if "Sort" in node_type:
-        sort_count += 1
-    if "Aggregate" in node_type:
-        aggregate_count += 1
-    if "Parallel" in node_type:
-        parallel_count += 1
+    print()
+    print("="*70)
+    print(f"RUNNING METHOD: "f"{CURRENT_METHOD}")
+    print("="*70)
 
-    shared_hit = node.get("Shared Hit Blocks", 0)
-    shared_read = node.get("Shared Read Blocks", 0)
-    shared_dirtied = node.get("Shared Dirtied Blocks", 0)
-    temp_read = node.get("Temp Read Blocks", 0)
-    temp_written = node.get("Temp Written Blocks", 0)
+    # temporarily switch active method
+    # config_gt.SAMPLING_METHOD=CURRENT_METHOD
 
-    for child in node.get("Plans", []):
-        (
-            child_ops,
-            child_depth,
-            child_join,
-            child_scan,
-            child_hash,
-            child_sort,
-            child_agg,
-            child_parallel,
-            child_hit,
-            child_read,
-            child_dirtied,
-            child_temp_read,
-            child_temp_written
-        ) = traverse_plan(child, depth + 1)
-
-        ops.extend(child_ops)
-        max_depth = max(max_depth, child_depth)
-        join_count += child_join
-        scan_count += child_scan
-        hash_count += child_hash
-        sort_count += child_sort
-        aggregate_count += child_agg
-        parallel_count += child_parallel
-        shared_hit += child_hit
-        shared_read += child_read
-        shared_dirtied += child_dirtied
-        temp_read += child_temp_read
-        temp_written += child_temp_written
-
-    return (
-        ops, max_depth,
-        join_count, scan_count, hash_count, sort_count, aggregate_count, parallel_count,
-        shared_hit, shared_read, shared_dirtied, temp_read, temp_written
+    DEFAULT_RESOLUTION,\
+    PARAM_RESOLUTIONS=(
+        config_gt.get_resolution_map(CURRENT_METHOD)
     )
 
-# =========================================================
-# Load SQL query and parse with sqlparse
-# =========================================================
-with open(QUERY_SQL_PATH, "r") as f:
-    sql_text = f.read()
+    print(f"Sampler: {CURRENT_METHOD} (default resolution={DEFAULT_RESOLUTION})")
 
-# =========================================================
-# Robust AST SQL parsing
-# =========================================================
+    sampler=import_module(
 
-parser = TPCHQueryParser()
-parsed = parser.parse(sql_text)
-print("\nParsed query successfully")
+        "samplers."
+        +
+        config_gt.SAMPLER_FILES[
+            CURRENT_METHOD
+        ]
+    )
 
-# =========================================================
-# Table aliases
-# =========================================================
+    config_gt.set_method_paths(CURRENT_METHOD,DEFAULT_RESOLUTION)
+    config_gt.ensure_paths()
 
-table_aliases = parsed["aliases"]
+    conn = get_conn(config_gt.DATABASE_NAME)
 
-# =========================================================
-# Parameter extraction
-# =========================================================
+    # FOR STABILITY
+    setup_cur = conn.cursor()
+    setup_cur.execute("SET jit = off;")
+    setup_cur.execute("SET max_parallel_workers_per_gather = 0;")
+    setup_cur.execute("SET track_io_timing = on;")
+    setup_cur.execute("SET enable_partitionwise_join = off;")
+    setup_cur.execute("SET enable_partitionwise_aggregate = off;")
+    setup_cur.close()
 
-param_columns = [
-    p.replace(":", "")
-    for p in parsed["parameters"]
-]
+    # =========================================================
+    # Create output directories
+    # =========================================================
+    config_gt.ensure_paths()
 
-param_columns = sorted(
-    param_columns,
-    key=lambda x: int(x[1:])
-)
-
-# =========================================================
-# Parameter → column mapping
-# =========================================================
-
-param_to_column = {}
-
-for pred in parsed["predicates"]:
-
-    cols = pred["columns"]
-    params = pred["parameters"]
-
-    if len(cols) == 0:
-        continue
-
-    if len(params) == 0:
-        continue
-
-    # use first column
-    col = cols[0]
-
-    for p in params:
-
-        p_clean = p.replace(":", "")
-
-        if p_clean not in param_to_column:
-            param_to_column[p_clean] = col
-
-print("Detected parameters:", param_columns)
-
-print("Parameter mapping:", param_to_column)
-
-print("Table aliases:", table_aliases)
+    print(f"Output directories ready:\n  {config_gt.PLANS_DIR}\n  {config_gt.PLAN_TREES_DIR}\n  {config_gt.TRACES_DIR}")
 
 
-# =========================================================
-# Compute total base relation size for selectivity
-# =========================================================
+    # =======================================================================================
+    # CAPTURE EXECUTION START TIME
+    script_start_wall = datetime.now()
+    script_start_perf = time.time()
 
-query_tables = sorted(
-    list(
-        set(
-            table_aliases.values()
+    print("\n=================================================")
+    print("SCRIPT START")
+    print("=================================================")
+    print(f"Start Time : {script_start_wall.strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=================================================\n")
+    # =======================================================================================
+
+
+    # =========================================================
+    # Helper functions for file storage
+    # =========================================================
+    def sanitize(v):
+        s = str(v)
+        s = s.replace("/", "_")
+        s = s.replace(":", "_")
+        s = s.replace(" ", "_")
+        s = s.replace(".", "p")
+        return s[:50]
+
+    def make_combo_filename(combo):
+        """Convert combo tuple to filename string."""
+        return "_".join([
+            f"x{i+1}_{sanitize(v)}"
+            for i, v in enumerate(combo)
+        ])
+
+
+    # =========================================================
+    # Helper to Rows surviving predicate
+    # =========================================================
+    def get_filtered_rows(node):
+
+        node_type=node.get(
+            "Node Type",""
         )
-    )
-)
 
-total_relation_rows = 0
-
-cur = conn.cursor()
-
-for table in query_tables:
-
-    cur.execute(
-        f"SELECT COUNT(*) FROM {table}"
-    )
-
-    cnt = cur.fetchone()[0]
-
-    total_relation_rows += cnt
-
-cur.close()
-
-print()
-print("=================================================")
-print("SELECTIVITY INFO")
-print("=================================================")
-
-print(
-    f"Query tables: {query_tables}"
-)
-
-print(
-    f"Total rows across tables: "
-    f"{total_relation_rows:,}"
-)
-
-print("=================================================\n")
-
-
-# =========================================================
-# Safe parameter substitution
-# =========================================================
-
-def substitute_params(sql_text, combo):
-
-    result = sql_text
-
-    for i, value in enumerate(combo):
-
-        param = f":p{i+1}"
-
-        # ---------------------------------------------
-        # strings / dates
-        # ---------------------------------------------
-
-        if isinstance(value, str):
-
-            replacement = "'" + value.replace("'", "''") + "'"
-
-        elif hasattr(value, "isoformat"):
-
-            replacement = "'" + value.isoformat() + "'"
-
-        # ---------------------------------------------
-        # numeric
-        # ---------------------------------------------
-
-        else:
-
-            replacement = str(value)
-
-        result = result.replace(param, replacement)
-
-    return result
-
-# =========================================================
-# Resolve unqualified column
-# =========================================================
-
-def resolve_column(
-    conn,
-    column_expr,
-    table_aliases
-):
-
-    # -----------------------------------------------------
-    # Qualified
-    # -----------------------------------------------------
-
-    if "." in column_expr:
-
-        alias, column = column_expr.split(".", 1)
-
-        if alias not in table_aliases:
-
-            raise RuntimeError(
-                f"Unknown alias: {alias}"
+        if (
+            "Scan" in node_type
+            and (
+                "Filter" in node
+                or
+                "Index Cond" in node
+            )
+        ):
+            return node.get(
+                "Actual Rows",
+                0
             )
 
+        for child in node.get(
+            "Plans",
+            []
+        ):
+
+            rows=get_filtered_rows(
+                child
+            )
+
+            if rows>0:
+                return rows
+
+        return 0
+
+    # =========================================================
+    # Plan traversal
+    # =========================================================
+
+
+    def traverse_plan(node, depth=0):
+        ops = []
+        node_type = node.get("Node Type", "UNKNOWN")
+        ops.append(node_type)
+        max_depth = depth
+
+        join_count = 0
+        scan_count = 0
+        hash_count = 0
+        sort_count = 0
+        aggregate_count = 0
+        parallel_count = 0
+
+        if "Join" in node_type or node_type == "Nested Loop":
+            join_count += 1
+        if "Scan" in node_type:
+            scan_count += 1
+        if "Hash" in node_type:
+            hash_count += 1
+        if "Sort" in node_type:
+            sort_count += 1
+        if "Aggregate" in node_type:
+            aggregate_count += 1
+        if "Parallel" in node_type:
+            parallel_count += 1
+
+        shared_hit = node.get("Shared Hit Blocks", 0)
+        shared_read = node.get("Shared Read Blocks", 0)
+        shared_dirtied = node.get("Shared Dirtied Blocks", 0)
+        temp_read = node.get("Temp Read Blocks", 0)
+        temp_written = node.get("Temp Written Blocks", 0)
+
+        for child in node.get("Plans", []):
+            (
+                child_ops,
+                child_depth,
+                child_join,
+                child_scan,
+                child_hash,
+                child_sort,
+                child_agg,
+                child_parallel,
+                child_hit,
+                child_read,
+                child_dirtied,
+                child_temp_read,
+                child_temp_written
+            ) = traverse_plan(child, depth + 1)
+
+            ops.extend(child_ops)
+            max_depth = max(max_depth, child_depth)
+            join_count += child_join
+            scan_count += child_scan
+            hash_count += child_hash
+            sort_count += child_sort
+            aggregate_count += child_agg
+            parallel_count += child_parallel
+            shared_hit += child_hit
+            shared_read += child_read
+            shared_dirtied += child_dirtied
+            temp_read += child_temp_read
+            temp_written += child_temp_written
+
         return (
-            table_aliases[alias],
-            column
+            ops, max_depth,
+            join_count, scan_count, hash_count, sort_count, aggregate_count, parallel_count,
+            shared_hit, shared_read, shared_dirtied, temp_read, temp_written
         )
 
-    # -----------------------------------------------------
-    # Unqualified
-    # -----------------------------------------------------
+    # =========================================================
+    # Load SQL query and parse with sqlparse
+    # =========================================================
+    with open(config_gt.QUERY_SQL_PATH, "r") as f:
+        sql_text = f.read()
 
-    column = column_expr
+    # =========================================================
+    # Robust AST SQL parsing
+    # =========================================================
+
+    parser = TPCHQueryParser()
+    parsed = parser.parse(sql_text)
+    print("\nParsed query successfully")
+
+    # =========================================================
+    # Table aliases
+    # =========================================================
+
+    table_aliases = parsed["aliases"]
+
+    # =========================================================
+    # Parameter extraction
+    # =========================================================
+
+    param_columns = [
+        p.replace(":", "")
+        for p in parsed["parameters"]
+    ]
+
+    param_columns = sorted(
+        param_columns,
+        key=lambda x: int(x[1:])
+    )
+
+    # =========================================================
+    # Parameter → column mapping
+    # =========================================================
+
+    param_to_column = {}
+
+    for pred in parsed["predicates"]:
+
+        cols = pred["columns"]
+        params = pred["parameters"]
+
+        if len(cols) == 0:
+            continue
+
+        if len(params) == 0:
+            continue
+
+        # use first column
+        col = cols[0]
+
+        for p in params:
+
+            p_clean = p.replace(":", "")
+
+            if p_clean not in param_to_column:
+                param_to_column[p_clean] = col
+
+    print("Detected parameters:", param_columns)
+
+    print("Parameter mapping:", param_to_column)
+
+    print("Table aliases:", table_aliases)
+
+
+    # =========================================================
+    # Compute total base relation size for selectivity
+    # =========================================================
+
+    query_tables = sorted(
+        list(
+            set(
+                table_aliases.values()
+            )
+        )
+    )
+
+    total_relation_rows = 0
 
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT table_name
-        FROM information_schema.columns
-        WHERE column_name = %s
-    """, (column,))
+    for table in query_tables:
 
-    matches = [
-        r[0]
-        for r in cur.fetchall()
-    ]
+        cur.execute(
+            f"SELECT COUNT(*) FROM {table}"
+        )
+
+        cnt = cur.fetchone()[0]
+
+        total_relation_rows += cnt
 
     cur.close()
 
-    query_tables = set(
-        table_aliases.values()
+    print()
+    print("=================================================")
+    print("SELECTIVITY INFO")
+    print("=================================================")
+
+    print(
+        f"Query tables: {query_tables}"
     )
 
-    matches = [
-        t for t in matches
-        if t in query_tables
-    ]
+    print(
+        f"Total rows across tables: "
+        f"{total_relation_rows:,}"
+    )
 
-    if len(matches) == 0:
+    print("=================================================\n")
 
-        raise RuntimeError(
-            f"Could not resolve column: {column}"
-        )
 
-    if len(matches) > 1:
+    # =========================================================
+    # Safe parameter substitution
+    # =========================================================
 
-        raise RuntimeError(
-            f"Ambiguous column: {column}"
-        )
+    def substitute_params(sql_text, combo):
 
-    return matches[0], column
+        result = sql_text
 
-# =========================================================
-# Cache DISTINCT column values
-# =========================================================
-distinct_cache = {}
-# =========================================================
-# Collect all values for each parameter
-# =========================================================
-# Selectivity-based methods are defined for 1-D and 2-D
-# only (matches the Picasso paper). Bail out early if the
-# template has more parameters.
-if SAMPLING_METHOD in ("selectivity_m1", "selectivity_m2"):
-    if len(param_columns) not in (1, 2):
-        raise RuntimeError(
-            f"SAMPLING_METHOD={SAMPLING_METHOD} only supports "
-            f"1-D or 2-D templates; got {len(param_columns)} "
-            f"parameters: {param_columns}"
-        )
+        for i, value in enumerate(combo):
 
-param_values_dict = {}
+            param = f":p{i+1}"
 
-for param in param_columns:
+            # ---------------------------------------------
+            # strings / dates
+            # ---------------------------------------------
 
-    column_expr = param_to_column[param]
+            if isinstance(value, str):
 
-    real_table, column = resolve_column(
+                replacement = "'" + value.replace("'", "''") + "'"
+
+            elif hasattr(value, "isoformat"):
+
+                replacement = "'" + value.isoformat() + "'"
+
+            # ---------------------------------------------
+            # numeric
+            # ---------------------------------------------
+
+            else:
+
+                replacement = str(value)
+
+            result = result.replace(param, replacement)
+
+        return result
+
+    # =========================================================
+    # Resolve unqualified column
+    # =========================================================
+
+    def resolve_column(
         conn,
         column_expr,
         table_aliases
-    )
+    ):
 
-    resolution = PARAM_RESOLUTIONS.get(
-        param,
-        DEFAULT_RESOLUTION
-    )
+        # -----------------------------------------------------
+        # Qualified
+        # -----------------------------------------------------
 
-    values = sampler.sample(
-        conn,
-        real_table,
-        column,
-        resolution,
-    )
+        if "." in column_expr:
 
-    param_values_dict[param] = values
+            alias, column = column_expr.split(".", 1)
 
-    print(
-        f"{param}: "
-        f"{len(values)} samples "
-        f"[{values[0]} → {values[-1]}]"
-    )
+            if alias not in table_aliases:
 
-for i, col in enumerate(param_columns):
-    print(f"Parameter [{col}] has {len(param_values_dict[col])} distinct values")
+                raise RuntimeError(
+                    f"Unknown alias: {alias}"
+                )
 
-# =========================================================
-# Prepare all combinations of parameters
-# =========================================================
-all_combinations = list(product(*param_values_dict.values()))
+            return (
+                table_aliases[alias],
+                column
+            )
 
-shape=[
-    len(param_values_dict[p])
-    for p in param_columns
-]
+        # -----------------------------------------------------
+        # Unqualified
+        # -----------------------------------------------------
 
-if len(all_combinations) > MAX_COMBINATIONS:
-    raise RuntimeError(
-        f"Too many combinations: {len(all_combinations)}"
-    )
-
-print(f"Total combinations to profile: {len(all_combinations)}")
-
-# =========================================================
-# Persistent cache for 3 runs per parameter combination
-# =========================================================
-all_temp_runs = {combo: [] for combo in all_combinations}
-
-# =========================================================
-# Run all queries TOTAL_ROUNDS times (discard warmup)
-# =========================================================
-def strip_order_by(sql_query):
-
-    parsed = sqlparse.parse(sql_query)[0]
-
-    output = []
-
-    depth = 0
-
-    tokens = list(parsed.flatten())
-
-    i = 0
-
-    while i < len(tokens):
-
-        token = tokens[i]
-
-        value = token.value
-        upper = value.upper()
-
-        depth += value.count("(")
-        depth -= value.count(")")
-
-        if depth == 0:
-
-            if upper == "ORDER":
-
-                j = i + 1
-
-                while j < len(tokens) and tokens[j].is_whitespace:
-                    j += 1
-
-                if j < len(tokens):
-
-                    if tokens[j].value.upper() == "BY":
-                        break
-
-        output.append(value)
-
-        i += 1
-
-    return "".join(output).strip()
-
-def get_filtered_cardinality(conn, query):
-
-    query_no_order = strip_order_by(query)
-    query_no_order = query_no_order.rstrip().rstrip(";")
-
-    wrapped = f"""
-    EXPLAIN (ANALYZE, FORMAT JSON)
-    {query_no_order}
-    """
-
-    cur = conn.cursor()
-    cur.execute(wrapped)
-
-    explain = cur.fetchone()[0][0]
-
-    cur.close()
-
-    plan = explain["Plan"]
-
-    return get_max_actual_rows(plan)
-
-# =========================================================
-# Precompute exact query output row counts
-# =========================================================
-
-combo_queries = {}
-combo_row_counts = {}
-
-for combo in all_combinations:
-
-    query_to_run = substitute_params(
-        sql_text,
-        combo
-    )
-
-    combo_queries[combo] = query_to_run
-
-    combo_row_counts[combo] = get_filtered_cardinality(
-        conn,
-        query_to_run
-    )
-    
-    #logs
-    if len(combo_queries) % 25 == 0:
-
-        print(
-            f"Preparation progress: "
-            f"{len(combo_queries)}/{len(all_combinations)}"
-        )
-    
-# =========================================================
-# LOGS
-global_start = time.time()
-total_queries = TOTAL_ROUNDS * len(all_combinations)
-completed_queries = 0
-# =========================================================
-
-for round_id in range(TOTAL_ROUNDS):
-    # FOR STABILITY
-    round_setup = conn.cursor()
-    round_setup.execute("DISCARD PLANS;")
-    round_setup.close()
-
-
-    print(f"\n--- Round {round_id + 1} ---\n")
-    for combo in all_combinations:
-        query_to_run = combo_queries[combo]
+        column = column_expr
 
         cur = conn.cursor()
 
-        try:
+        cur.execute("""
+            SELECT table_name
+            FROM information_schema.columns
+            WHERE column_name = %s
+        """, (column,))
 
-            cur.execute(
-                f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {query_to_run}"
-            )
-            explain_data = cur.fetchone()[0][0]
-
-        except Exception as e:
-
-            # failed_combos.append({
-            #     "combo": combo,
-            #     "error": str(e)
-            # })
-
-            print(f"FAILED combo={combo}")
-            print(e)
-            conn.rollback()
-            cur.close()
-            continue
+        matches = [
+            r[0]
+            for r in cur.fetchall()
+        ]
 
         cur.close()
 
-        execution_time = explain_data["Execution Time"]
+        query_tables = set(
+            table_aliases.values()
+        )
 
-        # ======================================================
-        # LOGS
-        completed_queries += 1
-        elapsed = time.time() - global_start
-        avg_time = elapsed / completed_queries
-        remaining = total_queries - completed_queries
-        eta_seconds = avg_time * remaining
-        eta_minutes = eta_seconds / 60
+        matches = [
+            t for t in matches
+            if t in query_tables
+        ]
+
+        if len(matches) == 0:
+
+            raise RuntimeError(
+                f"Could not resolve column: {column}"
+            )
+
+        if len(matches) > 1:
+
+            raise RuntimeError(
+                f"Ambiguous column: {column}"
+            )
+
+        return matches[0], column
+
+    # =========================================================
+    # Helper for Measuring actual selectivities
+    # =========================================================
+
+    def get_actual_selectivity(
+        conn,
+        table,
+        column,
+        value
+    ):
+
+        cur=conn.cursor()
+
+        cur.execute(
+            sql.SQL("""
+            SELECT
+                COUNT(*) FILTER(
+                    WHERE {col}<=%s
+                ),
+                COUNT(*)
+            FROM {tbl}
+            """).format(
+                col=sql.Identifier(column),
+                tbl=sql.Identifier(table)
+            ),
+            (value,)
+        )
+
+        matched,total=cur.fetchone()
+
+        cur.close()
+
+        return matched/max(total,1)
+
+    # =========================================================
+    # Cache DISTINCT column values
+    # =========================================================
+    distinct_cache = {}
+    # =========================================================
+    # Collect all values for each parameter
+    # =========================================================
+    # Selectivity-based methods are defined for 1-D and 2-D
+    # only (matches the Picasso paper). Bail out early if the
+    # template has more parameters.
+    if CURRENT_METHOD in ("m1", "m2"):
+        if len(param_columns) not in (1, 2):
+            raise RuntimeError(
+                f"SAMPLING_METHOD={CURRENT_METHOD} only supports "
+                f"1-D or 2-D templates; got {len(param_columns)} "
+                f"parameters: {param_columns}"
+            )
+
+    param_values_dict = {}
+
+    actual_axis_selectivities={}
+
+    for param in param_columns:
+
+        column_expr = param_to_column[param]
+
+        real_table, column = resolve_column(
+            conn,
+            column_expr,
+            table_aliases
+        )
+
+        resolution = PARAM_RESOLUTIONS.get(
+            param,
+            DEFAULT_RESOLUTION
+        )
+
+        values=sampler.sample(
+            conn,
+            real_table,
+            column,
+            resolution
+        )
+
+        actual_sels=[]
+
+        for v in values:
+
+            s=get_actual_selectivity(
+                conn,
+                real_table,
+                column,
+                v
+            )
+
+            actual_sels.append(s)
+
+        actual_axis_selectivities[
+            param
+        ]=actual_sels
+
+        param_values_dict[param] = values
 
         print(
-            f"[{completed_queries}/{total_queries}] "
-            f"combo={combo} "
-            f"time={execution_time:.2f} ms "
-            f"ETA={eta_minutes:.1f} min"
+            f"{param}: "
+            f"{len(values)} samples "
+            f"[{values[0]} → {values[-1]}]"
         )
-        # ======================================================
 
-        if round_id >= WARMUP_ROUND:
-            all_temp_runs[combo].append({
-                "runtime": execution_time,
-                "explain": explain_data,
-                "round": round_id + 1
-            })
+    for i, col in enumerate(param_columns):
+        print(f"Parameter [{col}] has {len(param_values_dict[col])} distinct values")
 
-    print(f"Completed round {round_id + 1}/{TOTAL_ROUNDS}")
+    # =========================================================
+    # Prepare all combinations of parameters
+    # =========================================================
+    all_combinations = list(product(*param_values_dict.values()))
 
-print("\nFinished precomputing row counts")
+    shape=[
+        len(param_values_dict[p])
+        for p in param_columns
+    ]
+
+    if len(all_combinations) > config_gt.MAX_COMBINATIONS:
+        raise RuntimeError(
+            f"Too many combinations: {len(all_combinations)}"
+        )
+
+    print(f"Total combinations to profile: {len(all_combinations)}")
+
+    # =========================================================
+    # Persistent cache for 3 runs per parameter combination
+    # =========================================================
+    all_temp_runs = {combo: [] for combo in all_combinations}
+
+    # =========================================================
+    # Run all queries config_gt.TOTAL_ROUNDS times (discard warmup)
+    # =========================================================
+    def strip_order_by(sql_query):
+
+        parsed = sqlparse.parse(sql_query)[0]
+
+        output = []
+
+        depth = 0
+
+        tokens = list(parsed.flatten())
+
+        i = 0
+
+        while i < len(tokens):
+
+            token = tokens[i]
+
+            value = token.value
+            upper = value.upper()
+
+            depth += value.count("(")
+            depth -= value.count(")")
+
+            if depth == 0:
+
+                if upper == "ORDER":
+
+                    j = i + 1
+
+                    while j < len(tokens) and tokens[j].is_whitespace:
+                        j += 1
+
+                    if j < len(tokens):
+
+                        if tokens[j].value.upper() == "BY":
+                            break
+
+            output.append(value)
+
+            i += 1
+
+        return "".join(output).strip()
+
+    def get_filtered_cardinality(plan):
+
+        total = 0
+        stack = [plan]
+
+        while stack:
+
+            node = stack.pop()
+
+            node_type = node.get(
+                "Node Type",
+                ""
+            )
+
+            if (
+                "Scan" in node_type
+                and (
+                    "Filter" in node
+                    or
+                    "Index Cond" in node
+                    or
+                    "Recheck Cond" in node
+                )
+            ):
+
+                actual_rows = float(
+                    node.get(
+                        "Actual Rows",
+                        0
+                    )
+                )
+
+                loops = float(
+                    node.get(
+                        "Actual Loops",
+                        1
+                    )
+                )
+
+                surviving = (
+                    actual_rows * loops
+                )
+
+                total = max(
+                    total,
+                    surviving
+                )
+
+            stack.extend(
+                node.get(
+                    "Plans",
+                    []
+                )
+            )
+
+        return int(total)
+
+    # =========================================================
+    # Prepare query cache only
+    # =========================================================
+
+    combo_queries = {}
+
+    for combo in all_combinations:
+
+        query_to_run=substitute_params(
+            sql_text,
+            combo
+        )
+        combo_queries[combo]=query_to_run
+
+        #logs
+        if len(combo_queries) % 25 == 0:
+
+            print(
+                f"Preparation progress: "
+                f"{len(combo_queries)}/{len(all_combinations)}"
+            )
+
+    # =========================================================
+    # LOGS
+    global_start = time.time()
+    total_queries = config_gt.TOTAL_ROUNDS * len(all_combinations)
+    completed_queries = 0
+    # =========================================================
+
+    for round_id in range(config_gt.TOTAL_ROUNDS):
+        # FOR STABILITY
+        round_setup = conn.cursor()
+        round_setup.execute("DISCARD PLANS;")
+        round_setup.close()
 
 
-# =========================================================
-# Compute global max cardinality
-# =========================================================
+        print(f"\n--- Round {round_id + 1} ---\n")
+        for combo in all_combinations:
+            query_to_run = combo_queries[combo]
 
-max_count = max(
-    combo_row_counts.values()
-)
+            cur = conn.cursor()
 
-print()
-print("=================================================")
-print("SELECTIVITY NORMALIZATION")
-print("=================================================")
+            try:
 
-print(
-    f"Max output cardinality: "
-    f"{max_count:,}"
-)
+                cur.execute(
+                    f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {query_to_run}"
+                )
+                explain_data = cur.fetchone()[0][0]
 
-print("=================================================")
-print()
+            except Exception as e:
+
+                print(f"FAILED combo={combo}")
+                print(e)
+                conn.rollback()
+                cur.close()
+                continue
+
+            cur.close()
+
+            execution_time = explain_data["Execution Time"]
+
+            # ======================================================
+            # LOGS
+            completed_queries += 1
+            elapsed = time.time() - global_start
+            avg_time = elapsed / completed_queries
+            remaining = total_queries - completed_queries
+            eta_seconds = avg_time * remaining
+            eta_minutes = eta_seconds / 60
+
+            print(
+                f"[{completed_queries}/{total_queries}] "
+                f"combo={combo} "
+                f"time={execution_time:.2f} ms "
+                f"ETA={eta_minutes:.1f} min"
+            )
+            # ======================================================
+
+            if round_id >= config_gt.WARMUP_ROUND:
+                all_temp_runs[combo].append({
+                    "runtime": execution_time,
+                    "explain": explain_data,
+                    "round": round_id + 1
+                })
+
+        print(f"Completed round {round_id + 1}/{config_gt.TOTAL_ROUNDS}")
+
+    print("\nFinished profiling all rounds")
 
 
-# =========================================================
-# Precompute selectivity lookup
-# =========================================================
+    # =========================================================
+    # Compute global max output cardinality
+    # (used for data-space-sampler selectivity normalisation)
+    # =========================================================
 
-axis_selectivities = {}
+    combo_row_counts = {}
 
-for param in param_columns:
+    for combo in all_combinations:
 
-    resolution = PARAM_RESOLUTIONS.get(
-        param,
-        DEFAULT_RESOLUTION
-    )
+        temp_runs = all_temp_runs[combo]
 
-    if SAMPLING_METHOD.startswith(
-        "selectivity"
-    ):
-        axis_selectivities[param] = (
-            sampler.selectivities(
-                resolution
+        if len(temp_runs)==0:
+            continue
+
+        explain = temp_runs[0]["explain"]
+
+        plan = explain["Plan"]
+
+        combo_row_counts[combo] = (
+            get_filtered_cardinality(
+                plan
             )
         )
-    else:
-        axis_selectivities[param] = None
 
-
-# =========================================================
-# Build rows for DataFrame
-# =========================================================
-
-all_intermediate_rows=[]
-
-for combo in all_combinations:
-
-    temp_runs=all_temp_runs[combo]
-
-    if len(temp_runs)==0:
-        continue
-
-    explain_data=temp_runs[0]["explain"]
-    plan=explain_data["Plan"]
-
-    all_intermediate_rows.append(
-        get_max_actual_rows(plan)
+    max_filtered_cardinality = max(
+        combo_row_counts.values(),
+        default=1
     )
 
-max_filtered_cardinality=max(combo_row_counts.values())
-
-rows=[]
-
-for combo_idx,combo in enumerate(all_combinations):
-
-    temp_runs=all_temp_runs[combo]
-
-    if len(temp_runs)==0:
-
-        print(
-            f"Skipping failed combo:{combo}"
-        )
-        continue
-
-
-    runtimes=[
-        r["runtime"]
-        for r in temp_runs
-    ]
-
-    runtime_mean=np.mean(
-        runtimes
-    )
-
-    runtime_std=np.std(
-        runtimes
-    )
-
-
-    best_run=min(
-        temp_runs,
-        key=lambda r:abs(
-            r["runtime"]
-            -runtime_mean
-        )
-    )
-
-    explain_data=best_run["explain"]
-
-    plan=explain_data["Plan"]
-
-
-    # =====================================================
-    # Cardinality for selectivity
-    # =====================================================
-
-    count_rows=combo_row_counts[combo]
-
-    selectivity=(
-        count_rows/
-        max(max_filtered_cardinality,1)
-    )
-
-    selectivity_percent = selectivity * 100
-
-    selectivity_axes = None
-
-
-    selectivity_percent=(
-        selectivity*100
-    )
-
-
-    root_node = plan.get("Node Type")
-    startup_cost = plan.get("Startup Cost")
-    total_cost = plan.get("Total Cost")
-    plan_rows = plan.get("Plan Rows")
-    root_rows = int(plan.get("Actual Rows", 0))
-
-    if root_rows is None:
-        root_rows = 0
-    root_rows = int(float(root_rows))
-
-
-    # =====================================================
-    # DISTINCT mode: use actual executed cardinality
-    # =====================================================
-    if combo_row_counts[combo] is None:
-        combo_row_counts[combo] = root_rows
-
-    workers_planned = plan.get("Workers Planned", 0)
-    workers_launched = plan.get("Workers Launched", 0)
-    execution_time = explain_data["Execution Time"]
-    planning_time = explain_data.get("Planning Time", 0)
-
-    (
-        ops,
-        max_depth,
-        join_count, scan_count, hash_count, sort_count, aggregate_count, parallel_count,
-        shared_hit, shared_read, shared_dirtied, temp_read, temp_written
-    ) = traverse_plan(plan)
-
-    node_count = len(ops)
-    plan_signature = "->".join(ops)
-
-    # =========================================================
-    # Compute plan hash using comparator
-    # =========================================================
-    plan_hash = structural_hash(explain_data)
-
-    # =========================================================
-    # Generate human-readable tree
-    # =========================================================
-    plan_tree = plan_tree_str(explain_data)
-
-    # =========================================================
-    # Save plan JSON file
-    # =========================================================
-    combo_filename = make_combo_filename(combo)
-    plan_json_path = PLANS_DIR / f"{combo_filename}.json"
-    with open(plan_json_path, "w") as f:
-        json.dump(explain_data, f, indent=2, default=json_serializer)
-    rel_plan_json_path = f"plans/{combo_filename}.json"
-
-    # =========================================================
-    # Save plan tree file
-    # =========================================================
-    plan_tree_path = PLAN_TREES_DIR / f"{combo_filename}.txt"
-    with open(plan_tree_path, "w") as f:
-        f.write(plan_tree)
-    rel_plan_tree_path = f"plan_trees/{combo_filename}.txt"
-
-    # =========================================================
-    # Save trace file (all measured runs)
-    # =========================================================
-    trace_data = {
-        "combo": list(combo),
-        "count_rows": combo_row_counts[combo],
-        "param_names": param_columns,
-        "measured_rounds": MEASURED_ROUNDS,
-        "runs": []
-    }
-    for run in temp_runs:
-        run_plan = run["explain"]["Plan"]
-        run_ops = traverse_plan(run_plan)[0]
-        run_plan_signature = "->".join(run_ops)
-        run_plan_hash = structural_hash(run["explain"])
-        run_shared_hit = run_plan.get("Shared Hit Blocks", 0)
-        run_shared_read = run_plan.get("Shared Read Blocks", 0)
-        run_shared_dirtied = run_plan.get("Shared Dirtied Blocks", 0)
-        run_temp_read = run_plan.get("Temp Read Blocks", 0)
-        run_temp_written = run_plan.get("Temp Written Blocks", 0)
-
-        trace_data["runs"].append({
-            "round": run["round"],
-            "runtime": run["runtime"],
-            "execution_time": run["explain"]["Execution Time"],
-            "planning_time": run["explain"].get("Planning Time", 0),
-            "count_rows": combo_row_counts[combo],
-            "plan_rows": run_plan.get("Plan Rows"),
-            "root_rows": run_plan.get("Actual Rows"),
-            "startup_cost": run_plan.get("Startup Cost"),
-            "total_cost": run_plan.get("Total Cost"),
-            "workers_planned": run_plan.get("Workers Planned", 0),
-            "workers_launched": run_plan.get("Workers Launched", 0),
-            "shared_hit_blocks": run_shared_hit,
-            "shared_read_blocks": run_shared_read,
-            "shared_dirtied_blocks": run_shared_dirtied,
-            "temp_read_blocks": run_temp_read,
-            "temp_written_blocks": run_temp_written,
-            "plan_signature": run_plan_signature,
-            "plan_hash": run_plan_hash,
-            "full_explain": run["explain"],
-            "selectivity_axes": selectivity_axes,
-            "selectivity": selectivity,
-            "selectivity_percent": selectivity_percent,
-        })
-
-    trace_path = TRACES_DIR / f"{combo_filename}_trace.json"
-    with open(trace_path, "w") as f:
-        json.dump(trace_data, f, indent=2, default=json_serializer)
-    rel_trace_path = f"traces/{combo_filename}_trace.json"
-
-    # =========================================================
-    # Compute convenience metrics
-    # =========================================================
-    shared_read_total = shared_hit + shared_read
-    shared_hit_ratio = shared_hit / shared_read_total if shared_read_total > 0 else 1.0
-    temp_total_blocks = temp_read + temp_written
-
-    rows.append([
-        *combo,  # x1, x2, x3...
-        runtime_mean,
-        runtime_std,
-        count_rows,
-        planning_time,
-        execution_time,
-        root_node,
-        startup_cost,
-        total_cost,
-        plan_rows,
-        root_rows,
-        shared_hit,
-        shared_read,
-        shared_dirtied,
-        shared_read_total,
-        shared_hit_ratio,
-        temp_read,
-        temp_written,
-        temp_total_blocks,
-        workers_planned,
-        workers_launched,
-        node_count,
-        max_depth,
-        join_count,
-        scan_count,
-        hash_count,
-        sort_count,
-        aggregate_count,
-        parallel_count,
-        plan_signature,
-        plan_hash,
-        rel_plan_json_path,
-        rel_plan_tree_path,
-        rel_trace_path,
-        selectivity_axes,
-        selectivity,
-        selectivity_percent,
-    ])
-
-    print(f"Combo={combo} | runtime={runtime_mean:.4f} ms | plan_hash={plan_hash[:8]}... | plan={root_node}")
-
-
-# =========================================================
-# Build DataFrame
-# =========================================================
-columns = [f"x{i+1}" for i in range(len(param_columns))] + [
-    "runtime_mean",
-    "runtime_std",
-    "count_rows",
-    "planning_time",
-    "execution_time",
-    "root_node",
-    "startup_cost",
-    "total_cost",
-    "plan_rows",
-    "root_rows",
-    "shared_hit_blocks",
-    "shared_read_blocks",
-    "shared_dirtied_blocks",
-    "shared_read_total",
-    "shared_hit_ratio",
-    "temp_read_blocks",
-    "temp_written_blocks",
-    "temp_total_blocks",
-    "workers_planned",
-    "workers_launched",
-    "node_count",
-    "max_depth",
-    "join_count",
-    "scan_count",
-    "hash_count",
-    "sort_count",
-    "aggregate_count",
-    "parallel_count",
-    "plan_signature",
-    "plan_hash",
-    "plan_json_path",
-    "plan_tree_path",
-    "trace_path",
-    "selectivity_axes",
-    "selectivity",
-    "selectivity_percent",
-]
-
-df = pd.DataFrame(rows, columns=columns)
-
-# =========================================================
-# Multi Dimension Plan change detection (using plan_hash)
-# =========================================================
-def count_plan_changes_nd(plan_grid):
-    """
-    Count plan changes across all neighboring cells
-    in an N-dimensional parameter grid.
-    """
-
-    plan_grid = np.array(plan_grid, dtype=object)
-
-    total_changes = 0
-
-    for axis in range(plan_grid.ndim):
-
-        rolled = np.roll(plan_grid, shift=1, axis=axis)
-
-        slicer = [slice(None)] * plan_grid.ndim
-        slicer[axis] = slice(1, None)
-
-        current = plan_grid[tuple(slicer)]
-        previous = rolled[tuple(slicer)]
-
-        diff = current != previous
-
-        total_changes += int(np.sum(diff))
-
-    return total_changes
-
-# =========================================================
-# Per-axis Plan Change Mask
-# =========================================================
-
-def compute_axis_plan_changes(plan_grid):
-
-    masks = []
-
-    for axis in range(plan_grid.ndim):
-
-        mask = np.zeros(
-            plan_grid.shape,
-            dtype=bool
-        )
-
-        slicer_curr = [slice(None)] * plan_grid.ndim
-        slicer_prev = [slice(None)] * plan_grid.ndim
-
-        slicer_curr[axis] = slice(1, None)
-        slicer_prev[axis] = slice(0, -1)
-
-        curr = plan_grid[tuple(slicer_curr)]
-        prev = plan_grid[tuple(slicer_prev)]
-
-        diff = curr != prev
-
-        mask[tuple(slicer_curr)] = diff
-
-        masks.append(mask)
-
-    return masks
-
-# =========================================================
-# Adjacent ND Q-error Per Axis
-# =========================================================
-def compute_axis_qerrors(runtime_grid):
-
-    runtime_grid = np.array(runtime_grid)
-
-    qerr_maps = []
-
-    for axis in range(runtime_grid.ndim):
-
-        #qmap = np.ones(runtime_grid.shape)
-        qmap = np.full(
-            runtime_grid.shape,
-            np.nan
-        )
-
-        slicer_curr = [slice(None)] * runtime_grid.ndim
-        slicer_prev = [slice(None)] * runtime_grid.ndim
-
-        slicer_curr[axis] = slice(1, None)
-        slicer_prev[axis] = slice(0, -1)
-
-        curr = runtime_grid[tuple(slicer_curr)]
-        prev = runtime_grid[tuple(slicer_prev)]
-
-        q = np.maximum(
-            curr / np.maximum(prev, 1e-9),
-            prev / np.maximum(curr, 1e-9)
-        )
-
-        qmap[tuple(slicer_curr)] = q
-
-        qerr_maps.append(qmap)
-
-    return qerr_maps
-
-# =========================================================
-# N-dimensional plan change analysis
-# =========================================================
-
-sort_cols = [f"x{i+1}" for i in range(len(param_columns))]
-
-df = (
-    df
-    .sort_values(sort_cols)
-    .reset_index(drop=True)
-)
-
-expected = np.prod(shape)
-
-if len(df) != expected:
-    raise RuntimeError(
-        f"Incomplete profiling results: "
-        f"{len(df)} / {expected} combos succeeded"
-    )
-
-plan_hash_grid = (
-    df["plan_hash"]
-    .values
-    .reshape(shape)
-)
-
-runtime_grid = (
-    df["runtime_mean"]
-    .values
-    .reshape(shape)
-)
-
-qerr_maps = compute_axis_qerrors(
-    runtime_grid
-)
-
-plan_masks = compute_axis_plan_changes(
-    plan_hash_grid
-)
-
-for axis in range(len(shape)):
-
-    df[f"adjacent_qerr_x{axis+1}"] = (
-        qerr_maps[axis]
-        .flatten()
-    )
-
-    df[f"plan_change_x{axis+1}"] = (
-        plan_masks[axis]
-        .flatten()
-    )
-
-# =====================================================
-# Store neighboring coordinates used in qerr
-# =====================================================
-
-xcols = sorted([
-    c for c in df.columns
-    if c.startswith("x")
-])
-
-coords = (
-    df[xcols]
-    .values
-    .reshape(
-        *shape,
-        len(shape)
-    )
-)
-
-for axis in range(len(shape)):
-
-    # object dtype preserves Decimal/date/string
-    neighbor_grid = np.empty(
-        coords.shape,
-        dtype=object
-    )
-
-    neighbor_grid[:] = None
-
-    slicer_curr = [
-        slice(None)
-    ] * len(shape)
-
-    slicer_prev = [
-        slice(None)
-    ] * len(shape)
-
-    slicer_curr[axis] = slice(
-        1,
-        None
-    )
-
-    slicer_prev[axis] = slice(
-        0,
-        -1
-    )
-
-    # copy neighboring coordinate point
-    neighbor_grid[
-        tuple(slicer_curr)
-    ] = coords[
-        tuple(slicer_prev)
-    ]
-
-    # save each coordinate separately
-    for d in range(len(shape)):
-
-        df[
-            f"x{d+1}_neighbor_axis{axis+1}"
-        ] = (
-            neighbor_grid[
-                ...,
-                d
-            ]
-            .flatten()
-        )
-        
-
-total_plan_changes = count_plan_changes_nd(plan_hash_grid)
-
-print("\nPlan change summary:")
-print(f"  Total neighboring plan changes: {total_plan_changes}")
-print(f"  Unique plan hashes: {df['plan_hash'].nunique()}")
-
-
-# =========================================================
-# Save metadata
-# =========================================================
-db_meta = get_db_metadata(conn)
-
-metadata = {
-    "query_name": query_name_from_path(QUERY_SQL_PATH),
-    "query_path": str(QUERY_SQL_PATH),
-    "parameters": param_columns,
-    "parameter_counts": [len(param_values_dict[col]) for col in param_columns],
-    "total_combinations": len(all_combinations),
-    "warmup_round": WARMUP_ROUND,
-    "measured_rounds": MEASURED_ROUNDS,
-    "collection_date": datetime.now().isoformat(),
-    "database": db_meta.get("database"),
-    "host": db_meta.get("host"),
-    "port": db_meta.get("port"),
-    "user": db_meta.get("user"),
-    "server_version": db_meta.get("server_version"),
-    "comparator_module": COMPARATOR_MODULE,
-    "plan_hash_method": PLAN_HASH_METHOD,
-    "sampling_method": SAMPLING_METHOD,
-    "notes": "All stats from measured rounds only. CSV contains mean runtime + metrics from run closest to mean. Trace files keep all measured runs."
-}
-
-metadata_path = RESULTS_DIR / METADATA_FILENAME
-with open(metadata_path, "w") as f:
-    json.dump(metadata, f, indent=2, default=json_serializer)
-
-print(f"\nSaved metadata: {metadata_path}")
-
-# =========================================================
-# Save CSV
-# =========================================================
-out_path = RESULTS_DIR / RESULTS_FILENAME
-df.to_csv(out_path, index=False)
-print(f"\nSaved: {out_path}")
-print(f"\nColumns ({len(columns)}): {columns}")
-print(f"\nShape: {df.shape}")
-print("\nHead:")
-print(df.head())
-print("\nPlan change summary:")
-for axis in range(len(shape)):
-
-    col = f"plan_change_x{axis+1}"
+    print()
+    print("=================================================")
+    print("SELECTIVITY NORMALIZATION")
+    print("=================================================")
 
     print(
-        f"  Axis {axis+1} plan changes: "
-        f"{df[col].sum()}"
+        f"Max output cardinality: "
+        f"{max_filtered_cardinality:,}"
     )
-print(f"  Unique plan hashes: {df['plan_hash'].nunique()}")
 
-conn.close()
+    print("=================================================")
+    print()
+
+
+    # =========================================================
+    # Build rows for DataFrame
+    # =========================================================
+
+    value_to_idx={}
+
+    for p in param_columns:
+
+        value_to_idx[p]={
+            v:i
+            for i,v in enumerate(
+                param_values_dict[p]
+            )
+        }
+
+    rows = []
+
+    for combo_idx, combo in enumerate(all_combinations):
+
+        temp_runs = all_temp_runs[combo]
+
+        if len(temp_runs) == 0:
+
+            print(
+                f"Skipping failed combo:{combo}"
+            )
+            continue
+
+
+        runtimes = [
+            r["runtime"]
+            for r in temp_runs
+        ]
+
+        runtime_mean = np.mean(runtimes)
+        runtime_std  = np.std(runtimes)
+
+        best_run = min(
+            temp_runs,
+            key=lambda r: abs(r["runtime"] - runtime_mean)
+        )
+
+        explain_data = best_run["explain"]
+        plan = explain_data["Plan"]
+
+
+        # =====================================================
+        # Selectivity
+        # =====================================================
+        count_rows = combo_row_counts[combo]
+
+        selectivity_axes=[]
+
+        for param,v in zip(param_columns,combo):
+
+            idx=value_to_idx[param][v]
+            selectivity_axes.append(actual_axis_selectivities[param][idx])
+
+        # observed joint selectivity
+        joint_sel = (count_rows /max(max_filtered_cardinality,1))
+        joint_sel = min(max(joint_sel,0.0),1.0)
+
+        # =====================================================
+        # Plan metrics
+        # =====================================================
+        root_node = plan.get("Node Type")
+        startup_cost = plan.get("Startup Cost")
+        total_cost = plan.get("Total Cost")
+        plan_rows = plan.get("Plan Rows")
+        rows_ret = int(plan.get("Actual Rows", 0))
+
+        if rows_ret is None:
+            rows_ret = 0
+        rows_ret = int(float(rows_ret))
+
+        # Fallback for DISTINCT mode
+        if combo_row_counts[combo] is None:
+            combo_row_counts[combo] = rows_ret
+            count_rows = rows_ret
+
+        workers_planned = plan.get("Workers Planned", 0)
+        workers_launched = plan.get("Workers Launched", 0)
+        execution_time = explain_data["Execution Time"]
+        planning_time = explain_data.get("Planning Time", 0)
+
+        (
+            ops,
+            max_depth,
+            join_count, scan_count, hash_count, sort_count, aggregate_count, parallel_count,
+            shared_hit, shared_read, shared_dirtied, temp_read, temp_written
+        ) = traverse_plan(plan)
+
+        node_count = len(ops)
+        plan_signature = "->".join(ops)
+
+        # =========================================================
+        # Compute plan hash using comparator
+        # =========================================================
+        plan_hash = structural_hash(explain_data)
+
+        # =========================================================
+        # Generate human-readable tree
+        # =========================================================
+        plan_tree = plan_tree_str(explain_data)
+
+        # =========================================================
+        # Save plan JSON file
+        # =========================================================
+        combo_filename = make_combo_filename(combo)
+        plan_json_path = config_gt.PLANS_DIR / f"{combo_filename}.json"
+        with open(plan_json_path, "w") as f:
+            json.dump(explain_data, f, indent=2, default=json_serializer)
+        rel_plan_json_path = f"plans/{combo_filename}.json"
+
+        # =========================================================
+        # Save plan tree file
+        # =========================================================
+        plan_tree_path = config_gt.PLAN_TREES_DIR / f"{combo_filename}.txt"
+        with open(plan_tree_path, "w") as f:
+            f.write(plan_tree)
+        rel_plan_tree_path = f"plan_trees/{combo_filename}.txt"
+
+        # =========================================================
+        # Save trace file (all measured runs)
+        # =========================================================
+        trace_data = {
+            "combo": list(combo),
+            "count_rows": count_rows,
+            "param_names": param_columns,
+            "MEASURED_ROUNDS": config_gt.MEASURED_ROUNDS,
+            "runs": []
+        }
+        for run in temp_runs:
+            run_plan = run["explain"]["Plan"]
+            run_ops = traverse_plan(run_plan)[0]
+            run_plan_signature = "->".join(run_ops)
+            run_plan_hash = structural_hash(run["explain"])
+            run_shared_hit = run_plan.get("Shared Hit Blocks", 0)
+            run_shared_read = run_plan.get("Shared Read Blocks", 0)
+            run_shared_dirtied = run_plan.get("Shared Dirtied Blocks", 0)
+            run_temp_read = run_plan.get("Temp Read Blocks", 0)
+            run_temp_written = run_plan.get("Temp Written Blocks", 0)
+
+            trace_data["runs"].append({
+                "round": run["round"],
+                "runtime": run["runtime"],
+                "execution_time": run["explain"]["Execution Time"],
+                "planning_time": run["explain"].get("Planning Time", 0),
+                "count_rows": count_rows,
+                "plan_rows": run_plan.get("Plan Rows"),
+                "rows_ret": run_plan.get("Actual Rows"),
+                "startup_cost": run_plan.get("Startup Cost"),
+                "total_cost": run_plan.get("Total Cost"),
+                "workers_planned": run_plan.get("Workers Planned", 0),
+                "workers_launched": run_plan.get("Workers Launched", 0),
+                "shared_hit_blocks": run_shared_hit,
+                "shared_read_blocks": run_shared_read,
+                "shared_dirtied_blocks": run_shared_dirtied,
+                "temp_read_blocks": run_temp_read,
+                "temp_written_blocks": run_temp_written,
+                "plan_signature": run_plan_signature,
+                "plan_hash": run_plan_hash,
+                "full_explain": run["explain"],
+                "selectivity_axes": selectivity_axes,
+                "joint_sel":joint_sel,
+            })
+
+        trace_path = config_gt.TRACES_DIR / f"{combo_filename}_trace.json"
+        with open(trace_path, "w") as f:
+            json.dump(trace_data, f, indent=2, default=json_serializer)
+        rel_trace_path = f"traces/{combo_filename}_trace.json"
+
+        # =========================================================
+        # Compute convenience metrics
+        # =========================================================
+        shared_read_total = shared_hit + shared_read
+        shared_hit_ratio = shared_hit / shared_read_total if shared_read_total > 0 else 1.0
+        temp_total_blocks = temp_read + temp_written
+
+        rows.append([
+            *combo,  # x1, x2, x3...
+            runtime_mean,
+            runtime_std,
+            count_rows,
+            planning_time,
+            execution_time,
+            root_node,
+            startup_cost,
+            total_cost,
+            plan_rows,
+            rows_ret,
+            shared_hit,
+            shared_read,
+            shared_dirtied,
+            shared_read_total,
+            shared_hit_ratio,
+            temp_read,
+            temp_written,
+            temp_total_blocks,
+            workers_planned,
+            workers_launched,
+            node_count,
+            max_depth,
+            join_count,
+            scan_count,
+            hash_count,
+            sort_count,
+            aggregate_count,
+            parallel_count,
+            plan_signature,
+            plan_hash,
+            rel_plan_json_path,
+            rel_plan_tree_path,
+            rel_trace_path,
+            selectivity_axes,
+            joint_sel,
+        ])
+
+        print(f"Combo={combo} | runtime={runtime_mean:.4f} ms | plan_hash={plan_hash[:8]}... | plan={root_node}")
+
+
+    # =========================================================
+    # Build DataFrame
+    # =========================================================
+    columns = [f"x{i+1}" for i in range(len(param_columns))] + [
+        "runtime_mean",
+        "runtime_std",
+        "count_rows",
+        "planning_time",
+        "execution_time",
+        "root_node",
+        "startup_cost",
+        "total_cost",
+        "plan_rows",
+        "rows_ret",
+        "shared_hit_blocks",
+        "shared_read_blocks",
+        "shared_dirtied_blocks",
+        "shared_read_total",
+        "shared_hit_ratio",
+        "temp_read_blocks",
+        "temp_written_blocks",
+        "temp_total_blocks",
+        "workers_planned",
+        "workers_launched",
+        "node_count",
+        "max_depth",
+        "join_count",
+        "scan_count",
+        "hash_count",
+        "sort_count",
+        "aggregate_count",
+        "parallel_count",
+        "plan_signature",
+        "plan_hash",
+        "plan_json_path",
+        "plan_tree_path",
+        "trace_path",
+        "selectivity_axes",
+        "joint_sel",
+    ]
+
+    df = pd.DataFrame(rows, columns=columns)
+
+    # =========================================================
+    # Multi Dimension Plan change detection (using plan_hash)
+    # =========================================================
+    def count_plan_changes_nd(plan_grid):
+        """
+        Count plan changes across all neighboring cells
+        in an N-dimensional parameter grid.
+        """
+
+        plan_grid = np.array(plan_grid, dtype=object)
+
+        total_changes = 0
+
+        for axis in range(plan_grid.ndim):
+
+            rolled = np.roll(plan_grid, shift=1, axis=axis)
+
+            slicer = [slice(None)] * plan_grid.ndim
+            slicer[axis] = slice(1, None)
+
+            current = plan_grid[tuple(slicer)]
+            previous = rolled[tuple(slicer)]
+
+            diff = current != previous
+
+            total_changes += int(np.sum(diff))
+
+        return total_changes
+
+    # =========================================================
+    # Per-axis Plan Change Mask
+    # =========================================================
+
+    def compute_axis_plan_changes(plan_grid):
+
+        masks = []
+
+        for axis in range(plan_grid.ndim):
+
+            mask = np.zeros(
+                plan_grid.shape,
+                dtype=bool
+            )
+
+            slicer_curr = [slice(None)] * plan_grid.ndim
+            slicer_prev = [slice(None)] * plan_grid.ndim
+
+            slicer_curr[axis] = slice(1, None)
+            slicer_prev[axis] = slice(0, -1)
+
+            curr = plan_grid[tuple(slicer_curr)]
+            prev = plan_grid[tuple(slicer_prev)]
+
+            diff = curr != prev
+
+            mask[tuple(slicer_curr)] = diff
+
+            masks.append(mask)
+
+        return masks
+
+    # =========================================================
+    # Adjacent ND Q-error Per Axis
+    # =========================================================
+    def compute_axis_qerrors(runtime_grid):
+
+        runtime_grid = np.array(runtime_grid)
+
+        qerr_maps = []
+
+        for axis in range(runtime_grid.ndim):
+
+            qmap = np.full(
+                runtime_grid.shape,
+                np.nan
+            )
+
+            slicer_curr = [slice(None)] * runtime_grid.ndim
+            slicer_prev = [slice(None)] * runtime_grid.ndim
+
+            slicer_curr[axis] = slice(1, None)
+            slicer_prev[axis] = slice(0, -1)
+
+            curr = runtime_grid[tuple(slicer_curr)]
+            prev = runtime_grid[tuple(slicer_prev)]
+
+            q = np.maximum(
+                curr / np.maximum(prev, 1e-9),
+                prev / np.maximum(curr, 1e-9)
+            )
+
+            qmap[tuple(slicer_curr)] = q
+
+            qerr_maps.append(qmap)
+
+        return qerr_maps
+
+    # =========================================================
+    # N-dimensional plan change analysis
+    # =========================================================
+
+    sort_cols = [f"x{i+1}" for i in range(len(param_columns))]
+
+    df = (
+        df
+        .sort_values(sort_cols)
+        .reset_index(drop=True)
+    )
+
+    expected = np.prod(shape)
+
+    if len(df) != expected:
+        raise RuntimeError(
+            f"Incomplete profiling results: "
+            f"{len(df)} / {expected} combos succeeded"
+        )
+
+    plan_hash_grid = (
+        df["plan_hash"]
+        .values
+        .reshape(shape)
+    )
+
+    runtime_grid = (
+        df["runtime_mean"]
+        .values
+        .reshape(shape)
+    )
+
+    qerr_maps = compute_axis_qerrors(
+        runtime_grid
+    )
+
+    plan_masks = compute_axis_plan_changes(
+        plan_hash_grid
+    )
+
+    for axis in range(len(shape)):
+
+        df[f"adjacent_qerr_x{axis+1}"] = (
+            qerr_maps[axis]
+            .flatten()
+        )
+
+        df[f"plan_change_x{axis+1}"] = (
+            plan_masks[axis]
+            .flatten()
+        )
+
+    # =====================================================
+    # Store neighboring coordinates used in qerr
+    # =====================================================
+
+    xcols = sorted([
+        c for c in df.columns
+        if c.startswith("x")
+    ])
+
+    coords = (
+        df[xcols]
+        .values
+        .reshape(
+            *shape,
+            len(shape)
+        )
+    )
+
+    for axis in range(len(shape)):
+
+        # object dtype preserves Decimal/date/string
+        neighbor_grid = np.empty(
+            coords.shape,
+            dtype=object
+        )
+
+        neighbor_grid[:] = None
+
+        slicer_curr = [
+            slice(None)
+        ] * len(shape)
+
+        slicer_prev = [
+            slice(None)
+        ] * len(shape)
+
+        slicer_curr[axis] = slice(
+            1,
+            None
+        )
+
+        slicer_prev[axis] = slice(
+            0,
+            -1
+        )
+
+        # copy neighboring coordinate point
+        neighbor_grid[
+            tuple(slicer_curr)
+        ] = coords[
+            tuple(slicer_prev)
+        ]
+
+        # save each coordinate separately
+        for d in range(len(shape)):
+
+            df[
+                f"x{d+1}_neighbor_axis{axis+1}"
+            ] = (
+                neighbor_grid[
+                    ...,
+                    d
+                ]
+                .flatten()
+            )
+
+    # =====================================================
+    # Create independent selectivity columns
+    # =====================================================
+
+    if "selectivity_axes" in df.columns:
+
+        for d in range(len(shape)):
+
+            df[
+                f"selectivity_x{d+1}"
+            ] = df[
+                "selectivity_axes"
+            ].apply(
+
+                lambda x:
+                x[d]
+                if (
+                    isinstance(x,(list,tuple))
+                    and len(x)>d
+                )
+                else np.nan
+            )
+
+    else:
+
+        for d in range(len(shape)):
+
+            df[
+                f"selectivity_x{d+1}"
+            ]=np.nan
+
+
+    # =====================================================
+    # Store neighbor selectivities and dS
+    # =====================================================
+
+    for axis in range(len(shape)):
+        
+        lookup={}
+
+        for idx,row in df.iterrows():
+
+            key=tuple(
+                row[f"x{i+1}"]
+                for i in range(len(shape))
+            )
+
+            lookup[key]=idx
+
+
+        neighbor_joint=[]
+
+        for i,row in df.iterrows():
+
+            neighbor_vals=[]
+
+            for d in range(len(shape)):
+
+                neighbor_vals.append(
+
+                    row[
+                        f"x{d+1}_neighbor_axis{axis+1}"
+                    ]
+                )
+
+            # --------------------------------
+            # boundary point
+            # --------------------------------
+
+            if any(
+                pd.isna(v)
+                for v in neighbor_vals
+            ):
+
+                neighbor_joint.append(
+                    np.nan
+                )
+
+                for d in range(len(shape)):
+
+                    df.loc[
+                        i,
+                        f"neighbor_selectivity_x{d+1}_axis{axis+1}"
+                    ]=np.nan
+
+                    df.loc[
+                        i,
+                        f"dS_x{d+1}_axis{axis+1}"
+                    ]=np.nan
+
+                continue
+
+
+            # --------------------------------
+            # locate neighbor row
+            # --------------------------------
+
+            neighbor_key=tuple(neighbor_vals)
+            neighbor_row=df.iloc[lookup[neighbor_key]]
+
+            # --------------------------------
+            # actual independent selectivities
+            # --------------------------------
+
+            for d in range(len(shape)):
+
+                curr_sel=row[
+                    f"selectivity_x{d+1}"
+                ]
+
+                neigh_sel=neighbor_row[
+                    f"selectivity_x{d+1}"
+                ]
+
+                df.loc[
+                    i,
+                    f"neighbor_selectivity_x{d+1}_axis{axis+1}"
+                ]=neigh_sel
+
+                df.loc[
+                    i,
+                    f"dS_x{d+1}_axis{axis+1}"
+                ]=abs(
+                    curr_sel
+                    -
+                    neigh_sel
+                )
+
+
+            # --------------------------------
+            # observed joint selectivity
+            # --------------------------------
+
+            curr_joint=row[
+                "joint_sel"
+            ]
+
+            neigh_joint=neighbor_row[
+                "joint_sel"
+            ]
+
+            neighbor_joint.append(
+                neigh_joint
+            )
+
+
+        # --------------------------------
+        # store joint values
+        # --------------------------------
+
+        df[
+            f"neighbor_joint_sel_axis{axis+1}"
+        ]=neighbor_joint
+
+
+        df[
+            f"joint_dS_axis{axis+1}"
+        ]=abs(
+            df["joint_sel"]
+            -
+            df[
+                f"neighbor_joint_sel_axis{axis+1}"
+            ]
+        )
+
+
+    total_plan_changes = count_plan_changes_nd(plan_hash_grid)
+
+    print("\nPlan change summary:")
+    print(f"  Total neighboring plan changes: {total_plan_changes}")
+    print(f"  Unique plan hashes: {df['plan_hash'].nunique()}")
+
+
+    # =========================================================
+    # Save metadata
+    # =========================================================
+    db_meta = config_gt.get_db_metadata(conn)
+
+    metadata = {
+        "query_name": config_gt.query_name_from_path(config_gt.QUERY_SQL_PATH),
+        "query_path": str(config_gt.QUERY_SQL_PATH),
+        "parameters": param_columns,
+        "parameter_counts": [len(param_values_dict[col]) for col in param_columns],
+        "total_combinations": len(all_combinations),
+        "WARMUP_ROUND": config_gt.WARMUP_ROUND,
+        "MEASURED_ROUNDS": config_gt.MEASURED_ROUNDS,
+        "collection_date": datetime.now().isoformat(),
+        "database": db_meta.get("database"),
+        "HOST": db_meta.get("config_gt.HOST"),
+        "port": db_meta.get("port"),
+        "USER": db_meta.get("config_gt.USER"),
+        "server_version": db_meta.get("server_version"),
+        "COMPARATOR_MODULE": config_gt.COMPARATOR_MODULE,
+        "PLAN_HASH_METHOD": config_gt.PLAN_HASH_METHOD,
+        "SAMPLING_METHOD": CURRENT_METHOD,
+        "notes": "All stats from measured rounds only. CSV contains mean runtime + metrics from run closest to mean. Trace files keep all measured runs."
+    }
+
+    metadata_path = config_gt.RESULTS_DIR / config_gt.METADATA_FILENAME
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, indent=2, default=json_serializer)
+
+    print(f"\nSaved metadata: {metadata_path}")
+
+    # =========================================================
+    # Save CSV
+    # =========================================================
+    out_path = config_gt.RESULTS_DIR / config_gt.RESULTS_FILENAME
+    df.to_csv(out_path, index=False)
+    print(f"\nSaved: {out_path}")
+    print(f"\nColumns ({len(columns)}): {columns}")
+    print(f"\nShape: {df.shape}")
+    print("\nHead:")
+    print(df.head())
+    print("\nPlan change summary:")
+    for axis in range(len(shape)):
+
+        col = f"plan_change_x{axis+1}"
+
+        print(
+            f"  Axis {axis+1} plan changes: "
+            f"{df[col].sum()}"
+        )
+    print(f"  Unique plan hashes: {df['plan_hash'].nunique()}")
+
+    conn.close()
+
+    # ==================================================
+    # Run per-method processors
+    # ==================================================
+
+    for processor in config_gt.PER_METHOD_PROCESSORS:
+
+        print()
+        print(
+            f"[{CURRENT_METHOD}] "
+            f"Running processor:"
+            f"{processor}"
+        )
+
+        run_processor(
+            processor, "per_method_processors",
+            config_gt.RESULTS_DIR
+        )
+
+        # --------------------------------
+        # future dispatch
+        # --------------------------------
+
+        # if processor=="neighbor_analysis":
+        #
+        #     neighbor_analysis(
+        #         config_gt.RESULTS_DIR
+        #     )
+        #
+        # elif processor=="qerr_stats":
+        #
+        #     qerr_stats(
+        #         config_gt.RESULTS_DIR
+        #     )
+
+    print()
+    print(
+        f"{CURRENT_METHOD} finished"
+    )
+
+    # =========================================================
+    # Final execution timing
+    # =========================================================
+
+    script_end_wall = datetime.now()
+    script_total_seconds = time.time() - script_start_perf
+
+    runtime_td = timedelta(seconds=int(script_total_seconds))
+    hours, remainder = divmod(int(script_total_seconds),3600)
+    minutes, seconds = divmod(remainder,60)
+
+    print("\n=================================================")
+    print(f"METHOD {CURRENT_METHOD} FINISHED")
+    print("=================================================")
+
+    print(f"Start Time : "f"{script_start_wall.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"End Time   : "f"{script_end_wall.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Total Time : "f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+    print(f"Total Secs : "f"{script_total_seconds:.2f} sec")
+    print("=================================================\n")
+
+# ==================================================
+# Global processors
+# ==================================================
+
+print()
+print("="*70)
+print("ALL METHODS COMPLETE")
+print("="*70)
+
+for processor in config_gt.GLOBAL_PROCESSORS:
+
+    print(
+        f"Running global processor:"
+        f"{processor}"
+    )
+
+    run_processor(
+        processor, "global_processors",
+        config_gt.MAIN_DIR
+    )
+
+    # --------------------------------
+    # future dispatch
+    # --------------------------------
+
+    # if processor=="compare_methods":
+    #
+    #     compare_methods(
+    #         config_gt.MAIN_DIR
+    #     )
+    #
+    # elif processor=="merge_all":
+    #
+    #     merge_all(
+    #         config_gt.MAIN_DIR
+    #     )
+    
 
 # =========================================================
-# Final execution timing
+# WHOLE SCRIPT FINISHED
 # =========================================================
 
-script_end_wall = datetime.now()
-script_total_seconds = time.time() - script_start_perf
+whole_script_end_wall=datetime.now()
 
-runtime_td = timedelta(
-    seconds=int(script_total_seconds)
+whole_script_total=(
+    time.time()
+    -whole_script_start_perf
 )
 
-hours, remainder = divmod(
-    int(script_total_seconds),
+hours,remainder=divmod(
+    int(whole_script_total),
     3600
 )
 
-minutes, seconds = divmod(
+minutes,seconds=divmod(
     remainder,
     60
 )
 
-print("\n=================================================")
-print("SCRIPT FINISHED")
-print("=================================================")
+print()
+print("="*80)
+print("ENTIRE PIPELINE FINISHED")
+print("="*80)
 
 print(
     f"Start Time : "
-    f"{script_start_wall.strftime('%Y-%m-%d %H:%M:%S')}"
+    f"{whole_script_start_wall.strftime('%Y-%m-%d %H:%M:%S')}"
 )
 
 print(
     f"End Time   : "
-    f"{script_end_wall.strftime('%Y-%m-%d %H:%M:%S')}"
+    f"{whole_script_end_wall.strftime('%Y-%m-%d %H:%M:%S')}"
 )
 
 print(
@@ -1443,8 +1883,8 @@ print(
 )
 
 print(
-    f"Total Secs : "
-    f"{script_total_seconds:.2f} sec"
+    f"Total Seconds : "
+    f"{whole_script_total:.2f}"
 )
 
-print("=================================================\n")
+print("="*80)

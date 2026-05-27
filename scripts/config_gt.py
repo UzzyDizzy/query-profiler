@@ -1,120 +1,229 @@
 #config_gt.py
 from pathlib import Path
 
-# Database Configs
+# =========================================================
+# 1. Database Configs
+# =========================================================
 DATABASE_NAME = "tpch"
 PASSWORD = "112358"
 USER = "postgres"
 HOST = "localhost"
+SF = "sf1"
 
-# Directory layout for ground truth artifacts
-RESULTS_DIR = Path("gt_results_sf1_qt8_10x10_m1")
-PLANS_DIR = RESULTS_DIR / "plans"
-PLAN_TREES_DIR = RESULTS_DIR / "plan_trees"
-TRACES_DIR = RESULTS_DIR / "traces"
+# Imports
+# Plan Comparator
+COMPARATOR_MODULE = "scripts/automated_script/comparator.py"
+PLAN_HASH_METHOD = "structural_hash_md5"
 
-# SQL source for the profiled query
-QUERY_SQL_PATH = Path(__file__).resolve().parent / "automated_script" / "queries" / "qt8.sql"
+# =========================================================
+# 2. SQL source
+# =========================================================
 
+QUERY="qt8"
+
+QUERY_SQL_PATH=(
+    Path(__file__).resolve().parent
+    / "automated_script"
+    / "queries"
+    / f"{QUERY}.sql"
+)
+
+# =========================================================
+# 3. Method registry
+# =========================================================
+
+METHOD_CONFIGS = {
+
+    "m0":{
+        "sampler":"sampler_data_m0",
+        "resolution":{
+            "default":10,
+            # "p1":100
+        }
+    },
+
+    "m1":{
+        "sampler":"sampler_selectivity_m1",
+        "resolution":{
+            "default":10,
+        }
+    },
+
+    "m2":{
+
+        "sampler":"sampler_selectivity_m2",
+        "resolution":{
+            "default":10,
+        }
+    },
+
+    "m3":{
+
+        "sampler":"sampler_selectivity_m3",
+        "resolution":{
+            "default":10,
+        }
+    },
+
+}
+
+# =========================================================
+# 4. Sampling method
+# =========================================================
+# all  -> run all methods sequentially
+# m0   -> data-space
+# m1   -> selectivity uniform
+# m2   -> Picasso exponential
+CURRENT_METHOD=None
+SAMPLING_METHOD = "all"
+
+if SAMPLING_METHOD == "all" :
+    RUN_METHODS=list(METHOD_CONFIGS.keys())
+elif SAMPLING_METHOD != None :
+    RUN_METHODS = [SAMPLING_METHOD]
+else:
+    RUN_METHODS = ["m0", "m1", "m2", "m3"]
+
+
+SAMPLER_FILES={
+    k:v["sampler"]
+    for k,v in METHOD_CONFIGS.items()
+}
+
+# =========================================================
+# 5. Method → sampler file mapping
+# =========================================================
+
+def get_active_methods():
+
+    if SAMPLING_METHOD=="all":
+        return RUN_METHODS
+
+    if SAMPLING_METHOD not in SAMPLER_FILES:
+        raise RuntimeError(
+            f"Unknown method: "
+            f"{SAMPLING_METHOD}"
+        )
+
+    return [SAMPLING_METHOD]
+
+# =========================================================
+# 6. Result directories
+# =========================================================
+
+MAIN_DIR=Path( f"gt_results_{SF}_{QUERY}" )
+
+RESULTS_DIR=None
+PLANS_DIR=None
+PLAN_TREES_DIR=None
+TRACES_DIR=None
+RESULTS_FILENAME = "ground_truth.csv"
+METADATA_FILENAME = "gt_metadata.json"
+
+def get_method_dir(method, resolution):
+    return ( MAIN_DIR / f"{method}_{resolution}x{resolution}" )
+
+def set_method_paths(method, resolution):
+    global RESULTS_DIR
+    global PLANS_DIR
+    global PLAN_TREES_DIR
+    global TRACES_DIR
+
+    RESULTS_DIR=get_method_dir(method, resolution)
+    PLANS_DIR=RESULTS_DIR/"plans"
+    PLAN_TREES_DIR=(RESULTS_DIR/"plan_trees")
+    TRACES_DIR=(RESULTS_DIR/"traces")
+
+
+# =========================================================
+# 7. Other Configs and Constraints
+# =========================================================
 # Profiling rounds
 TOTAL_ROUNDS = 4
 WARMUP_ROUND = 1
 MEASURED_ROUNDS = list(range(WARMUP_ROUND + 1, TOTAL_ROUNDS + 1))
 
-# =========================================================
-# Sampling method
-# =========================================================
-#
-# "normal"          - linear spacing in the parameter-value
-#                     domain (any N-D).
-# "selectivity_m1"  - percentile_cont — exact CDF inverse
-#                     from the data. 1-D or 2-D only.
-# "selectivity_m2"  - Picasso-style histogram interpolation
-#                     using pg_stats. 1-D or 2-D only.
-#
-# Used by build_gt.py to pick which sampler module to call.
-
-SAMPLING_METHOD = "selectivity_m1"
-
-# =========================================================
-# Per-method resolutions
-# =========================================================
-
-# Linear value-spacing — works in any number of dimensions.
-NORMAL_RES = {
-    "default": 10,
-    # "p1": 100,
-    # "p2": 100,
-}
-
-# Method 1 (percentile_cont). 1-D / 2-D.
-SELECTIVITY_RES_M1 = {
-    "default": 10,
-    # "p1": 100,
-    # "p2": 100,
-}
-
-# Method 2 (Picasso histogram). 1-D / 2-D.
-SELECTIVITY_RES_M2 = {
-    "default": 10,
-    # "p1": 100,
-    # "p2": 100,
-}
-
-# Backwards-compat aliases — kept so older call sites
-# don't break.
-DEFAULT_RESOLUTION = NORMAL_RES["default"]
-PARAM_RESOLUTIONS = {
-    k: v for k, v in NORMAL_RES.items() if k != "default"
-}
-
-
-def get_resolution_map():
-    """Return (default, per-param overrides) for the active method."""
-    if SAMPLING_METHOD == "normal":
-        src = NORMAL_RES
-    elif SAMPLING_METHOD == "selectivity_m1":
-        src = SELECTIVITY_RES_M1
-    elif SAMPLING_METHOD == "selectivity_m2":
-        src = SELECTIVITY_RES_M2
-    else:
-        raise RuntimeError(f"Unknown SAMPLING_METHOD: {SAMPLING_METHOD}")
-
-    default = src.get("default", 100)
-    overrides = {k: v for k, v in src.items() if k != "default"}
-    return default, overrides
-
-# =========================================================
-# Hard caps (auto-clamped)
-# =========================================================
-
-# Integer/date params:
-# cannot exceed distinct possible values
-#
-# Float/decimal:
-# unrestricted
-
+# Maximum points for ground truth sampling
+# Integer/date params: cannot exceed distinct possible values; Float/decimal: unrestricted
 MAX_COMBINATIONS = 20000
+
+
+# =========================================================
+# 8. Post-processing
+# =========================================================
+
+# Runs AFTER EACH method
+PER_METHOD_PROCESSORS=[
+    "grid_overview",
+    "merge_qerr_instances",
+    "merge_qerr_instances_nb",
+    "instance_grid_maps",
+    # "neighbor_analysis",
+    # "qerr_stats",
+    # "plan_summary",
+]
+
+# Runs ONCE after ALL methods
+GLOBAL_PROCESSORS=[
+    "compare_sampling_grid",
+    "compare_sampling_grid_nb",
+    # "compare_methods",
+    # "merge_all",
+    # "build_dashboard",
+]
 
 # ===========================================================
 
-# Output filenames
-RESULTS_FILENAME = "ground_truth.csv"
-METADATA_FILENAME = "gt_metadata.json"
 
-# Comparator metadata
-COMPARATOR_MODULE = "scripts/automated_script/comparator.py"
-PLAN_HASH_METHOD = "structural_hash_md5"
+def get_resolution_map(method=None):
+
+    method=(
+        method
+        or
+        CURRENT_METHOD
+        or
+        SAMPLING_METHOD
+    )
+
+    cfg=METHOD_CONFIGS[method]
+    src=cfg.get(
+        "resolution",
+        {
+            "default":10
+        }
+    )
+    default=src.get(
+        "default",
+        10
+    )
+
+    overrides={
+        k:v
+        for k,v in src.items()
+        if k!="default"
+    }
+
+    return (
+        default,
+        overrides
+    )
 
 
 def query_name_from_path(path: Path) -> str:
     return path.stem
 
-
 def ensure_paths():
-    for d in [RESULTS_DIR, PLANS_DIR, PLAN_TREES_DIR, TRACES_DIR]:
-        d.mkdir(parents=True, exist_ok=True)
-
+    for d in [
+        RESULTS_DIR,
+        PLANS_DIR,
+        PLAN_TREES_DIR,
+        TRACES_DIR
+    ]:
+        if d is not None:
+            d.mkdir(
+                parents=True,
+                exist_ok=True
+            )
 
 def get_db_metadata(conn):
     metadata = {
