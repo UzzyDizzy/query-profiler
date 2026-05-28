@@ -3,44 +3,6 @@
 # =========================================================
 
 
-# =====================================================
-# Tee logger
-# =====================================================
-
-import sys
-from pathlib import Path
-
-
-class Tee:
-
-    def __init__(self,*files):
-        self.files=files
-
-    def write(self,obj):
-
-        for f in self.files:
-            f.write(obj)
-            f.flush()
-
-    def flush(self):
-
-        for f in self.files:
-            f.flush()
-
-    def fileno(self):
-
-        for f in self.files:
-
-            try:
-                return f.fileno()
-
-            except Exception:
-                pass
-
-        raise OSError(
-            "No fileno available"
-        )
-
 #===========================================================
 # CLI Arguements helper for running multiple queries
 import argparse
@@ -133,7 +95,25 @@ import importlib.util
 from tpch.utils.comparator import structural_hash, plan_tree_str
 
 
+# =====================================================
+# Tee logger
+# =====================================================
+# import sys
+# from pathlib import Path
 
+# class Tee:
+
+#     def __init__(self,*files):
+#         self.files=files
+
+#     def write(self,data):
+#         for f in self.files:
+#             f.write(data)
+#             f.flush()
+
+#     def flush(self):
+#         for f in self.files:
+#             f.flush()
 
 #===========================================================
 # Logging setup
@@ -145,6 +125,23 @@ LOGFILE_MODE=(
         "0"
     )=="1"
 )
+
+# LOG_DIR=Path("gt_run_logs")
+# LOG_DIR.mkdir(exist_ok=True)
+
+# query_name=config_gt.QUERY
+
+# log_path=LOG_DIR / f"{query_name}.log"
+
+# log_f=open(
+#     log_path,
+#     "a",
+#     buffering=1,
+#     encoding="utf-8"
+# )
+
+# sys.stdout=Tee(sys.__stdout__,log_f)
+# sys.stderr=Tee(sys.__stderr__,log_f)
 #===========================================================
 
 
@@ -535,73 +532,6 @@ for CURRENT_METHOD in METHODS_TO_RUN:
     # =========================================================
     config_gt.ensure_paths()
 
-
-    # =====================================================
-    # Standalone logging
-    # =====================================================
-
-    if os.environ.get(
-        "GT_LOGFILE_MODE"
-    )!="1":
-
-        log_dir=Path(
-            "gt_run_logs"
-        )
-
-        log_dir.mkdir(
-            exist_ok=True
-        )
-
-        log_path=(
-            log_dir
-            /
-            f"{config_gt.QUERY}.log"
-        )
-
-        log_file=open(
-
-            log_path,
-
-            "a",
-
-            buffering=1,
-
-            encoding="utf-8"
-
-        )
-
-        sys.stdout=Tee(
-            sys.stdout,
-            log_file
-        )
-
-        sys.stderr=Tee(
-            sys.stderr,
-            log_file
-        )
-
-        print(
-            "\n"
-            + "="*80
-        )
-
-        print(
-            "DIRECT build_gt.py RUN"
-        )
-
-        print(
-            f"LOG FILE: {log_path}"
-        )
-
-        print(
-            f"START: "
-            f"{time.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-
-        print(
-            "="*80
-            + "\n"
-        )
 
     # =====================================================
     # Resume state
@@ -1168,18 +1098,13 @@ for CURRENT_METHOD in METHODS_TO_RUN:
             vals=[]
 
             pbar=tqdm(
-
                 total=total_rows,
-
                 desc=(
                     f"Cache "
                     f"{table}.{column}"
                 ),
-
                 unit="row",
-
                 disable=LOGFILE_MODE,
-                ascii=False,
             )
 
             while True:
@@ -1339,7 +1264,6 @@ for CURRENT_METHOD in METHODS_TO_RUN:
                 unit="point",
                 leave=False,
                 disable=LOGFILE_MODE,
-                ascii=False,
             ):
 
                 s=get_axis_selectivity(
@@ -1600,7 +1524,6 @@ for CURRENT_METHOD in METHODS_TO_RUN:
         desc="Caching queries",
         unit="query",
         disable=LOGFILE_MODE,
-        ascii=False,
     ):
 
         combo_queries[combo]=(
@@ -1630,7 +1553,6 @@ for CURRENT_METHOD in METHODS_TO_RUN:
 
         print(f"\n--- Round {round_id + 1} ---\n")
 
-        IS_TTY=(sys.stdout.isatty() and sys.stderr.isatty())
         combo_pbar=tqdm(
             all_combinations,
             desc=(
@@ -1638,7 +1560,7 @@ for CURRENT_METHOD in METHODS_TO_RUN:
                 f"Round {round_id+1}"
             ),
             unit="combo",
-            disable=LOGFILE_MODE
+            disable=LOGFILE_MODE,
         )
 
         for combo in combo_pbar:
