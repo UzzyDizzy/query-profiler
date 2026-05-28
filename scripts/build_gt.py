@@ -22,7 +22,7 @@ if args.query:
 
     config_gt.QUERY_SQL_PATH = (
         config_gt.Path(__file__).resolve().parent
-        / "utils"
+        / "tpch"
         / "queries"
         / f"{config_gt.QUERY}.sql"
     )

@@ -31,7 +31,7 @@ QUERY="qt8"
 
 QUERY_SQL_PATH=(
     Path(__file__).resolve().parent
-    / "utils"
+    / "tpch"
     / "queries"
     / f"{QUERY}.sql"
 )
