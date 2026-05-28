@@ -520,6 +520,51 @@ for CURRENT_METHOD in METHODS_TO_RUN:
         ]
     )
 
+    # =====================================================
+    # Remove stale completed runs with missing traces
+    # =====================================================
+
+    valid_completed=set()
+
+    for key in completed_runs:
+
+        try:
+
+            parts=key.split("_",1)
+
+            combo_part=parts[1]
+
+            combo_vals=tuple(
+                combo_part.split("|")
+            )
+
+            combo_filename=make_combo_filename(
+                combo_vals
+            )
+
+            trace_path=(
+                config_gt.TRACES_DIR
+                /
+                f"{combo_filename}_trace.json"
+            )
+
+            if trace_path.exists():
+
+                valid_completed.add(key)
+
+        except Exception:
+            continue
+
+    completed_runs=valid_completed
+
+    resume_state["completed"]=list(
+        completed_runs
+    )
+
+    save_resume_state(
+        resume_state
+    )
+
     print(
         f"Found "
         f"{len(completed_runs)} "
@@ -1230,6 +1275,96 @@ for CURRENT_METHOD in METHODS_TO_RUN:
     # =========================================================
     all_temp_runs = {combo: [] for combo in all_combinations}
 
+    # =========================================
+    # Rebuild temp runs from trace files
+    # =========================================
+
+    for combo in all_combinations:
+
+        combo_filename=make_combo_filename(combo)
+
+        trace_path=(
+            config_gt.TRACES_DIR
+            /
+            f"{combo_filename}_trace.json"
+        )
+
+        if not trace_path.exists():
+            continue
+
+        try:
+
+            with open(trace_path,"r") as f:
+                trace_data=json.load(f)
+
+            runs=trace_data.get(
+                "runs",
+                []
+            )
+
+            rebuilt=[]
+
+            for r in runs:
+
+                rebuilt.append({
+
+                    "runtime":
+                    r["runtime"],
+
+                    "round":
+                    r["round"],
+
+                    "explain":
+                    r["full_explain"]
+
+                })
+
+            all_temp_runs[combo]=rebuilt
+
+        except Exception as e:
+
+            print(
+                f"Failed rebuilding trace:"
+                f"{trace_path}"
+            )
+
+            print(e)
+
+    # =========================================
+    # Validate rebuilt runs
+    # =========================================
+
+    valid_completed_runs=set()
+
+    for combo in all_combinations:
+
+        runs=all_temp_runs[combo]
+
+        for r in runs:
+
+            key=combo_key(
+                combo,
+                r["round"]-1
+            )
+
+            valid_completed_runs.add(key)
+
+    completed_runs=valid_completed_runs
+
+    resume_state["completed"]=list(
+        completed_runs
+    )
+
+    save_resume_state(
+        resume_state
+    )
+
+    print(
+        f"Validated "
+        f"{len(completed_runs)} "
+        f"completed runs from traces"
+    )
+
     # =========================================================
     # GLOBAL ETAs
     # =========================================================
@@ -1812,7 +1947,7 @@ for CURRENT_METHOD in METHODS_TO_RUN:
         ])
 
 
-    # Check for combos processed
+    # Check for combos Processed combos check
     processed_combos=len(rows)
     expected_combos=len(all_combinations)
 
