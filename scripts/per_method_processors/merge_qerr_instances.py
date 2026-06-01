@@ -1,5 +1,5 @@
 # =========================================================
-# scripts/merge_all_qerr_instances.py
+# scripts/per_method_processors/merge_all_qerr_instances.py
 # =========================================================
 
 from pathlib import Path

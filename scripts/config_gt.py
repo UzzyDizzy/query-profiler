@@ -2,6 +2,7 @@
 # config_gt.py
 # =========================================================
 from pathlib import Path
+import os
 
 # =========================================================
 # 1. Database Configs
@@ -46,20 +47,30 @@ QUERY_SQL_PATH=(
 # selectivity_m2  – exponential resolution over the selectivity
 #                   space (geometric method).
 
+# SET EITHER DEFAULT RES FOR ALL OR CUSTOM P1/P2... RES FOR ALL
+DEF_RES_ALL = 10
+
+P1_RES_ALL = 5
+P2_RES_ALL = None
+
+# SET DEFAULT/CUSTOM RES FOR EACH METHOD
 METHOD_CONFIGS = {
 
     "m0":{
         "sampler":"sampler_data_m0",
         "resolution":{
-            "default":100,
-            # "p1":100
+            "default":DEF_RES_ALL,
+            "p1": P1_RES_ALL,
+            "p2": P2_RES_ALL,
         }
     },
 
     "m1":{
         "sampler":"sampler_selectivity_m1",
         "resolution":{
-            "default":100,
+            "default":DEF_RES_ALL,
+            "p1": P1_RES_ALL,
+            "p2": P2_RES_ALL,
         }
     },
 
@@ -67,19 +78,41 @@ METHOD_CONFIGS = {
 
         "sampler":"sampler_selectivity_m2",
         "resolution":{
-            "default":100,
+            "default":DEF_RES_ALL,
+            "p1": P1_RES_ALL,
+            "p2": P2_RES_ALL,
         }
     },
 
-    # "m3":{
+    "m3":{
 
-    #     "sampler":"sampler_selectivity_m3",
-    #     "resolution":{
-    #         "default":10,
-    #     }
-    # },
+        "sampler":"sampler_selectivity_m3",
+        "resolution":{
+            "default":DEF_RES_ALL,
+            "p1": P1_RES_ALL,
+            "p2": P2_RES_ALL,
+        }
+    },
 
 }
+
+# SET GLOBAL_PROCESSOR RES HELPER
+
+res_cfg = METHOD_CONFIGS["m0"]["resolution"]
+default_res = res_cfg["default"]
+
+GLOBAL_PROCESSOR_RES = "x".join(
+
+    str(
+        res_cfg[k]
+        if res_cfg[k] is not None
+        else default_res
+    )
+
+    for k in sorted(res_cfg)
+    if k.startswith("p")
+)
+
 
 # =========================================================
 # 4. Sampling method
@@ -126,7 +159,22 @@ def get_active_methods():
 # 6. Result directories
 # =========================================================
 
-MAIN_DIR=Path( f"gt_results_sf{SF}_{QUERY}" )
+# Result mode suffix
+IS_MULTI_RUN=(
+    os.environ.get("GT_LOGFILE_MODE")
+    == "1"
+)
+
+RUN_SUFFIX=(
+    "_m"
+    if IS_MULTI_RUN
+    else "_s"
+)
+
+# Main result directory
+MAIN_DIR=Path(
+    f"gt_results_sf{SF}_{QUERY}{RUN_SUFFIX}"
+)
 
 RESULTS_DIR=None
 PLANS_DIR=None
@@ -136,7 +184,12 @@ RESULTS_FILENAME = "ground_truth.csv"
 METADATA_FILENAME = "gt_metadata.json"
 
 def get_method_dir(method, resolution):
-    return ( MAIN_DIR / f"{resolution}x{resolution}" / f"{method}" )
+
+    return (
+        MAIN_DIR
+        / str(resolution)
+        / method
+    )
 
 def set_method_paths(method, resolution):
     global RESULTS_DIR

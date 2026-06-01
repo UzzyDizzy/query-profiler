@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
-from config_gt import MAIN_DIR
+import config_gt
 
 
 # ======================================
@@ -21,6 +21,19 @@ METHOD_COLORS={
     "m2":"green"
 }
 
+AUTO_COLORS=[
+
+    "orange",
+    "purple",
+    "brown",
+    "cyan",
+    "magenta",
+    "olive",
+    "pink",
+    "gray"
+
+]
+
 GRID_ALPHA=.55
 GRID_WIDTH=1.5
 POINT_SIZE=60
@@ -32,27 +45,35 @@ def run(main_dir):
 
     methods=[]
 
-    for m in ["m0","m1","m2"]:
+    for m in config_gt.RUN_METHODS:
 
-        dirs=list(
-            main_dir.glob(
-                f"{m}_*"
-            )
+        gt_file=(
+            main_dir
+            / m
+            / "ground_truth.csv"
         )
 
-        if len(dirs)==0:
+        if not gt_file.exists():
+
+            print(
+                f"Missing: {gt_file}"
+            )
+
             continue
 
         methods.append(
             (
                 m,
-                pd.read_csv(
-                    dirs[0]/"ground_truth.csv"
-                )
+                pd.read_csv(gt_file)
             )
         )
 
     if len(methods)==0:
+
+        print(
+            f"No ground_truth.csv files found under {main_dir}"
+        )
+
         return
 
     # ====================================
@@ -110,7 +131,31 @@ def run(main_dir):
 
     for method,df in methods:
 
-        color=METHOD_COLORS[method]
+        if method in METHOD_COLORS:
+
+            color=METHOD_COLORS[method]
+
+        else:
+
+            used_colors=set(
+                METHOD_COLORS.values()
+            )
+
+            available=[
+
+                c
+                for c in AUTO_COLORS
+                if c not in used_colors
+
+            ]
+
+            color=(
+                available[0]
+                if available
+                else "black"
+            )
+
+            METHOD_COLORS[method]=color
 
         x=np.sort(
             df["x1"].unique()
@@ -158,7 +203,7 @@ def run(main_dir):
     plt.tight_layout()
 
     out=(
-        main_dir/
+        main_dir/ 
         "sampling_grid_compare.png"
     )
 
@@ -180,5 +225,5 @@ def run(main_dir):
 if __name__=="__main__":
 
     run(
-        MAIN_DIR
+        config_gt.MAIN_DIR / config_gt.GLOBAL_PROCESSOR_RES
     )

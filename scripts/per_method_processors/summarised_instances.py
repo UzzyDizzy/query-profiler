@@ -3,322 +3,168 @@
 # ==========================================================
 
 from pathlib import Path
-import pandas as pd
+
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+import config_gt
 
 
-# ==========================================================
-
-TOPK=1000
-
-
-# ==========================================================
+# =========================================================
+# Processor entry
+# =========================================================
 
 def run(results_dir):
 
-    results_dir=Path(
-        results_dir
-    )
+    results_dir = Path(results_dir)
 
-    infile=(
+    csv_path = results_dir / config_gt.RESULTS_FILENAME
 
-        results_dir
-        /
-        "merged_qerr_instances"
-        /
-        "all_qerr_instances_desc.csv"
+    output_dir = results_dir / "summaries"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    )
+    print()
+    print("=" * 60)
+    print("QERR SINGLE MAX SUMMARY")
+    print("=" * 60)
 
-    if not infile.exists():
+    # =====================================================
+    # LOAD
+    # =====================================================
 
-        print(
-            f"missing: {infile}"
-        )
-
+    if not csv_path.exists():
+        print(f"Missing:\n{csv_path}")
         return
 
+    df = pd.read_csv(csv_path)
 
-    outdir=(
+    # =====================================================
+    # MERGE AXES (MAX QERR PER INSTANCE)
+    # =====================================================
 
-        results_dir
-        /
-        "summaries"
+    rows = []
 
-    )
-
-    outdir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-
-    print()
-    print(
-        "===================================="
-    )
-    print(
-        "BUILDING INSTANCE SUMMARY"
-    )
-    print(
-        "===================================="
-    )
-
-
-    # ======================================================
-    # load
-    # ======================================================
-
-    df=pd.read_csv(
-        infile
-    )
-
-
-    # ======================================================
-    # coordinates
-    # ======================================================
-
-    x_cols=sorted([
-
-        c
-
-        for c in df.columns
-
-        if (
-
-            c.startswith("x")
-            and
-            "_neighbor" not in c
-
-        )
-
+    qcols = sorted([
+        c for c in df.columns
+        if c.startswith("adjacent_qerr_x")
     ])
 
+    instance_rank = 0
 
-    coord_cols=[
-        "instance_id",
-        *x_cols
-    ]
+    for _, base_row in df.iterrows():
 
+        instance_rank += 1
 
-    # ======================================================
-    # top-k split
-    # ======================================================
+        max_qerr = -np.inf
+        max_axis = None
 
-    top=df.head(
-        min(
-            TOPK,
-            len(df)
-        )
-    )
+        for qcol in qcols:
 
+            axis = int(qcol.split("_x")[-1])
 
-    yes=top[
+            pcol = f"plan_change_x{axis}"
 
-        top[
-            "plan_change"
-        ].astype(str)
-        .str.upper()
-        .isin([
-            "TRUE",
-            "YES",
-            "1"
-        ])
+            if pcol not in df.columns:
+                continue
 
-    ]
+            q = base_row.get(qcol, np.nan)
 
+            if not np.isfinite(q):
+                continue
 
-    no=top[
+            if q <= 0:
+                continue
 
-        ~top[
-            "plan_change"
-        ].astype(str)
-        .str.upper()
-        .isin([
-            "TRUE",
-            "YES",
-            "1"
-        ])
+            if q > max_qerr:
 
-    ]
+                max_qerr = q
+                max_axis = axis
+                max_plan_change = bool(base_row[pcol])
 
+        if max_axis is None:
+            continue
 
-    # ======================================================
-    # max qerror
-    # ======================================================
+        rows.append({
+            "rank": instance_rank,
+            "instance_id": base_row.get("instance_id", instance_rank),
+            "x1": base_row.get("x1"),
+            "x2": base_row.get("x2"),
+            "max_qerr": max_qerr,
+            "plan_change": max_plan_change
+        })
 
-    maxq=(
+    merged = pd.DataFrame(rows)
 
-        df.groupby(
-            coord_cols,
-            dropna=False
-        )["qerr"]
+    if merged.empty:
+        print("No valid rows.")
+        return
 
-        .max()
+    merged = merged[np.isfinite(merged["max_qerr"])]
+    merged = merged[merged["max_qerr"] > 0]
 
-        .reset_index()
+    # =====================================================
+    # TOP 1 GLOBAL MAX-QERR INSTANCE
+    # =====================================================
 
-        .rename(
-
-            columns={
-
-                "qerr":
-                "max_qerr"
-
-            }
-
-        )
-    )
-
-
-    # ======================================================
-    # plan-change counts
-    # ======================================================
-
-    yescnt=(
-
-        yes.groupby(
-            coord_cols,
-            dropna=False
-        )
-
-        .size()
-
-        .reset_index(
-            name=
-            "top1000_planchange_yes"
-        )
-
-    )
-
-
-    nocnt=(
-
-        no.groupby(
-            coord_cols,
-            dropna=False
-        )
-
-        .size()
-
-        .reset_index(
-            name=
-            "top1000_planchange_no"
-        )
-
-    )
-
-
-    # ======================================================
-    # merge
-    # ======================================================
-
-    out=maxq.merge(
-
-        yescnt,
-
-        on=coord_cols,
-
-        how="left"
-
-    )
-
-
-    out=out.merge(
-
-        nocnt,
-
-        on=coord_cols,
-
-        how="left"
-
-    )
-
-
-    out[
-
-        "top1000_planchange_yes"
-
-    ]=(
-
-        out[
-            "top1000_planchange_yes"
-        ]
-
-        .fillna(0)
-        .astype(int)
-
-    )
-
-
-    out[
-
-        "top1000_planchange_no"
-
-    ]=(
-
-        out[
-            "top1000_planchange_no"
-        ]
-
-        .fillna(0)
-        .astype(int)
-
-    )
-
-
-    # ======================================================
-    # sort
-    # ======================================================
-
-    out=out.sort_values(
-
+    top1 = merged.sort_values(
         "max_qerr",
-
         ascending=False
+    ).head(1).reset_index(drop=True)
 
-    )
+    row = top1.iloc[0]
 
+    # =====================================================
+    # TOP 1000 STATS
+    # =====================================================
 
-    out.insert(
+    top1000 = merged.sort_values(
+        "max_qerr",
+        ascending=False
+    ).head(1000)
 
-        0,
-        "rank",
+    plan_yes = (top1000["plan_change"] == True).sum()
+    plan_no = (top1000["plan_change"] == False).sum()
 
-        np.arange(
-            1,
-            len(out)+1
-        )
-    )
+    # =====================================================
+    # FINAL OUTPUT
+    # =====================================================
 
-
-    # ======================================================
-    # save
-    # ======================================================
-
-    outfile=(
-
-        outdir
-        /
-        "summarised_instances.csv"
-
-    )
-
-
-    out.to_csv(
-
-        outfile,
-        index=False
-
-    )
-
-
-    print(
-        f"saved: {outfile}"
-    )
-
-    print(
-        f"rows: {len(out)}"
-    )
+    final_df = pd.DataFrame([{
+        "rank": int(row["rank"]),
+        "instance_id": row["instance_id"],
+        "x1": row["x1"],
+        "x2": row["x2"],
+        "max_qerr": row["max_qerr"],
+        "top1000_planchange_yes": int(plan_yes),
+        "top1000_planchange_no": int(plan_no)
+    }])
 
     print()
+    print("=" * 60)
+    print("FINAL SUMMARY")
+    print("=" * 60)
+    print(final_df)
+
+    # =====================================================
+    # SAVE
+    # =====================================================
+
+    out_csv = output_dir / "summary.csv"
+    final_df.to_csv(out_csv, index=False)
+
+    print(f"Saved:\n{out_csv}")
+    print()
+    print("DONE")
+
+
+if __name__ == "__main__":
+
+    run(
+        "gt_results_sf10_qt8/100x100/m1"
+    )

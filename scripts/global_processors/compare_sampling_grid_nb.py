@@ -21,6 +21,19 @@ METHOD_COLORS={
     "m2":"green"
 }
 
+AUTO_COLORS=[
+
+    "orange",
+    "purple",
+    "brown",
+    "cyan",
+    "magenta",
+    "olive",
+    "pink",
+    "gray"
+
+]
+
 GRID_ALPHA=.55
 GRID_WIDTH=1.5
 POINT_SIZE=60
@@ -39,35 +52,35 @@ def run(main_dir=None):
 
     methods=[]
 
+    for m in config_gt.RUN_METHODS:
 
-    # ==================================
-    # dynamically load methods
-    # ==================================
+        gt_file=(
+            main_dir
+            / m
+            / "ground_truth.csv"
+        )
 
-    for m in config_gt.METHOD_CONFIGS:
+        if not gt_file.exists():
 
-        dirs=list(
-
-            main_dir.glob(
-                f"{m}_*"
+            print(
+                f"Missing: {gt_file}"
             )
 
-        )
-
-        if len(dirs)==0:
             continue
 
-        df=pd.read_csv(
-            dirs[0]/
-            "ground_truth.csv"
-        )
-
         methods.append(
-            (m,df)
+            (
+                m,
+                pd.read_csv(gt_file)
+            )
         )
-
 
     if len(methods)==0:
+
+        print(
+            f"No ground_truth.csv files found under {main_dir}"
+        )
+
         return
 
 
@@ -153,10 +166,29 @@ def run(main_dir=None):
 
     for method,df in methods:
 
-        color=METHOD_COLORS.get(
-            method,
-            "black"
-        )
+        if method in METHOD_COLORS:
+
+            color=METHOD_COLORS[method]
+
+        else:
+
+            used_colors=set(
+                METHOD_COLORS.values()
+            )
+
+            available=[
+                c
+                for c in AUTO_COLORS
+                if c not in used_colors
+            ]
+
+            color=(
+                available[0]
+                if available
+                else "black"
+            )
+
+            METHOD_COLORS[method]=color
 
 
         x=np.sort(
@@ -277,4 +309,4 @@ def run(main_dir=None):
 
 if __name__=="__main__":
 
-    run()
+    run(config_gt.MAIN_DIR / config_gt.GLOBAL_PROCESSOR_RES)

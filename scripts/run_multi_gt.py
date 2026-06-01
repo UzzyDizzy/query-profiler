@@ -22,9 +22,9 @@ QUERIES=[
 
     "qt8",
     "qt7",
-    "qt11",
-    "qt12",
-    "qt13",
+    "qt10",
+    "qt16",
+    "qt5",
 
 ]
 
@@ -192,6 +192,7 @@ def run_query(query_name):
         env=dict(
             os.environ
         )
+        env["GT_RUN_MODE"] = "multi"
 
         env[
             "GT_LOGFILE_MODE"

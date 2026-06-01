@@ -7,30 +7,34 @@
 # CLI Arguements helper for running multiple queries
 import argparse
 import config_gt
+import os
 
-parser = argparse.ArgumentParser()
+print(f"PID={os.getpid()}")
 
-parser.add_argument(
-    "--query",
-    type=str,
-    required=False,
-)
+if os.environ.get("GT_RUN_MODE") == "multi":
+    parser = argparse.ArgumentParser()
 
-args = parser.parse_args()
-
-if args.query:
-    config_gt.QUERY = args.query
-
-    config_gt.QUERY_SQL_PATH = (
-        config_gt.Path(__file__).resolve().parent
-        / "tpch"
-        / "queries"
-        / f"{config_gt.QUERY}.sql"
+    parser.add_argument(
+        "--query",
+        type=str,
+        required=False,
     )
 
-    config_gt.MAIN_DIR = config_gt.Path(
-        f"gt_results_{config_gt.SF}_{config_gt.QUERY}"
-    )
+    args = parser.parse_args()
+
+    if args.query:
+        config_gt.QUERY = args.query
+
+        config_gt.QUERY_SQL_PATH = (
+            config_gt.Path(__file__).resolve().parent
+            / "tpch"
+            / "queries"
+            / f"{config_gt.QUERY}.sql"
+        )
+
+        config_gt.MAIN_DIR = config_gt.Path(
+            f"gt_results_sf{config_gt.SF}_{config_gt.QUERY}{config_gt.RUN_SUFFIX}"
+        )
 # ===========================================================
 
 
@@ -51,40 +55,6 @@ from tqdm import tqdm
 import sys
 from collections import deque
 import config_gt
-
-# from config_gt import (
-#     config_gt.QUERY_SQL_PATH,
-#     config_gt.RESULTS_DIR,
-#     config_gt.PLANS_DIR,
-#     config_gt.PLAN_TREES_DIR,
-#     config_gt.TRACES_DIR,
-#     config_gt.TOTAL_ROUNDS,
-#     config_gt.WARMUP_ROUND,
-#     config_gt.MEASURED_ROUNDS,
-#     config_gt.RESULTS_FILENAME,
-#     config_gt.METADATA_FILENAME,
-#     config_gt.COMPARATOR_MODULE,
-#     config_gt.PLAN_HASH_METHOD,
-#     config_gt.MAX_COMBINATIONS,
-#     config_gt.SAMPLING_METHOD,
-#     config_gt.RUN_METHODS,
-#     config_gt.GLOBAL_PROCESSORS,
-#     config_gt.PER_METHOD_PROCESSORS,
-#     config_gt.get_resolution_map,
-#     config_gt.set_method_paths,
-#     config_gt.ensure_paths,
-#     config_gt.query_name_from_path,
-#     config_gt.get_db_metadata,
-#     config_gt.DATABASE_NAME,
-#     config_gt.USER,
-#     config_gt.HOST,
-#     config_gt.PASSWORD,
-#     config_gt.QUERY_CACHE,
-#     config_gt.SAMPLER_FILES,
-#     config_gt.get_active_methods,
-#     config_gt.config_gt.MAIN_DIR,
-# )
-
 import re
 import psycopg2
 import psycopg2.sql as sql
@@ -291,6 +261,44 @@ def run_processor(name, processor_dir, arg):
 # Helpers to Resume Script Run
 # =====================================================
 
+def run_missing_processors():
+
+    resume_state = load_resume_state()
+
+    completed = set(
+        resume_state.get(
+            "processors_completed",
+            []
+        )
+    )
+
+    for processor in config_gt.PER_METHOD_PROCESSORS:
+
+        if processor in completed:
+            continue
+
+        print()
+        print(
+            f"[RESUME] Running processor: "
+            f"{processor}"
+        )
+
+        run_processor(
+            processor,
+            "per_method_processors",
+            config_gt.RESULTS_DIR
+        )
+
+        completed.add(processor)
+
+        resume_state[
+            "processors_completed"
+        ] = sorted(completed)
+
+        save_resume_state(
+            resume_state
+        )
+
 def get_resume_file():
 
     return (
@@ -486,12 +494,7 @@ for CURRENT_METHOD in METHODS_TO_RUN:
 
     print()
     print("="*70)
-    print(f"RUNNING METHOD: "f"{CURRENT_METHOD}")
-
-    print("\n"+ "#"*80)
-    print(f"METHOD START: "f"{CURRENT_METHOD}")
-    print("#"*80+ "\n")
-    
+    print(f"RUNNING METHOD: "f"{CURRENT_METHOD}")    
     print("="*70)
 
     # temporarily switch active method
@@ -500,6 +503,15 @@ for CURRENT_METHOD in METHODS_TO_RUN:
     DEFAULT_RESOLUTION,\
     PARAM_RESOLUTIONS=(
         config_gt.get_resolution_map(CURRENT_METHOD)
+    )
+    PARAM_RESOLUTIONS={
+        k:(v if v is not None else DEFAULT_RESOLUTION)
+        for k,v in PARAM_RESOLUTIONS.items()
+    }
+
+    RES_STR="x".join(
+        str(PARAM_RESOLUTIONS[p])
+        for p in sorted(PARAM_RESOLUTIONS)
     )
 
     print(f"Sampler: {CURRENT_METHOD} (default resolution={DEFAULT_RESOLUTION})")
@@ -513,7 +525,7 @@ for CURRENT_METHOD in METHODS_TO_RUN:
         ]
     )
 
-    config_gt.set_method_paths(CURRENT_METHOD,DEFAULT_RESOLUTION)
+    config_gt.set_method_paths(CURRENT_METHOD,RES_STR)
     config_gt.ensure_paths()
 
     conn = get_conn(config_gt.DATABASE_NAME)
@@ -547,9 +559,14 @@ for CURRENT_METHOD in METHODS_TO_RUN:
         print()
         print("="*70)
         print(
-            f"{CURRENT_METHOD} already completed."
+            f"{CURRENT_METHOD} GT already completed."
+        )
+        print(
+            "Checking processors..."
         )
         print("="*70)
+
+        run_missing_processors()
 
         continue
 
@@ -2469,7 +2486,11 @@ for CURRENT_METHOD in METHODS_TO_RUN:
     # Save CSV
     # =========================================================
     out_path = config_gt.RESULTS_DIR / config_gt.RESULTS_FILENAME
+
     df.to_csv(out_path, index=False)
+    resume_state["processors_completed"] = []
+    save_resume_state(resume_state)
+
     print(f"\nSaved: {out_path}")
     print(f"\nColumns ({len(columns)}): {columns}")
     print(f"\nShape: {df.shape}")
@@ -2506,7 +2527,19 @@ for CURRENT_METHOD in METHODS_TO_RUN:
     # Run per-method processors
     # ==================================================
 
+    resume_state = load_resume_state()
+
+    completed_processors = set(
+        resume_state.get(
+            "processors_completed",
+            []
+        )
+    )
+
     for processor in config_gt.PER_METHOD_PROCESSORS:
+
+        if processor in completed_processors:
+            continue
 
         print()
         print(
@@ -2516,8 +2549,23 @@ for CURRENT_METHOD in METHODS_TO_RUN:
         )
 
         run_processor(
-            processor, "per_method_processors",
+            processor,
+            "per_method_processors",
             config_gt.RESULTS_DIR
+        )
+
+        completed_processors.add(
+            processor
+        )
+
+        resume_state[
+            "processors_completed"
+        ] = sorted(
+            completed_processors
+        )
+
+        save_resume_state(
+            resume_state
         )
 
         # --------------------------------
@@ -2580,7 +2628,7 @@ for processor in config_gt.GLOBAL_PROCESSORS:
 
     run_processor(
         processor, "global_processors",
-        config_gt.MAIN_DIR
+        config_gt.MAIN_DIR / config_gt.GLOBAL_PROCESSOR_RES,
     )
 
     # --------------------------------
@@ -2647,3 +2695,5 @@ print(
 )
 
 print("="*80)
+
+print(f"PID={os.getpid()} FINISHED")

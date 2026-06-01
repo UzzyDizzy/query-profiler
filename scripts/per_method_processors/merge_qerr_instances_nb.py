@@ -1,5 +1,5 @@
 # =========================================================
-# scripts/merge_all_qerr_instances.py
+# scripts/per_method_processors/merge_all_qerr_instances.py
 # =========================================================
 
 from pathlib import Path
@@ -110,15 +110,15 @@ def run(results_dir):
         ]
 
         # ======================================
-        # remove ALL boundary points
-        # for current point
+        # remove ALL boundary points for current point
         # ======================================
 
         for c in x_cols:
 
-            vals=np.sort(
-                df[c].unique()
-            )
+            vals=np.sort(df[c].unique())
+
+            if len(vals) <= 2:
+                continue
 
             minv=vals[0]
             maxv=vals[-1]
@@ -139,6 +139,9 @@ def run(results_dir):
             vals=np.sort(
                 df[c].unique()
             )
+
+            if len(vals) <= 2:
+                continue
 
             minv=vals[0]
             maxv=vals[-1]
@@ -356,6 +359,10 @@ def run(results_dir):
     merged=pd.DataFrame(
         rows
     )
+
+    if len(rows)==0:
+        print("No non-boundary qerr instances found")
+        return
 
     merged=merged.sort_values(
         "qerr",
