@@ -1,5 +1,5 @@
 # ==========================================================
-# scripts/per_method_processors/grid_overview.py
+# scripts/per_method_processors/sample_grid.py
 # ==========================================================
 
 from pathlib import Path
@@ -30,7 +30,7 @@ def run(results_dir):
 
     outdir=(
         results_dir/
-        "grids"
+        "grid_sample"
     )
 
     outdir.mkdir(

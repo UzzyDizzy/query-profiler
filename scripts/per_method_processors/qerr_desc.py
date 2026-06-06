@@ -1,5 +1,5 @@
 # =========================================================
-# scripts/per_method_processors/merge_all_qerr_instances.py
+# scripts/per_method_processors/qerr_desc.py
 # =========================================================
 
 from pathlib import Path
@@ -20,7 +20,7 @@ def run(results_dir):
 
     OUTPUT_DIR=(
         RESULTS_DIR/
-        "merged_qerr_instances"
+        "qerr_sorted"
     )
 
     OUTPUT_DIR.mkdir(
@@ -553,7 +553,7 @@ def run(results_dir):
     # SAVE
     # =========================================================
 
-    out_csv=(OUTPUT_DIR / "all_qerr_instances_desc.csv")
+    out_csv=(OUTPUT_DIR / "qerr_desc.csv")
 
     merged.to_csv(
         out_csv,
@@ -587,7 +587,7 @@ def run(results_dir):
     # ==========================================
 
     df = pd.read_csv(
-        OUTPUT_DIR / "all_qerr_instances_desc.csv"
+        OUTPUT_DIR / "qerr_desc.csv"
     )
 
     # ==========================================

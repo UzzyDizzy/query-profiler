@@ -20,11 +20,11 @@ import os
 
 QUERIES=[
 
-    "qt8",
+    "qt5",
     "qt7",
+    "qt8",
     "qt10",
     "qt16",
-    "qt5",
 
 ]
 

@@ -50,7 +50,7 @@ QUERY_SQL_PATH=(
 # SET EITHER DEFAULT RES FOR ALL OR CUSTOM P1/P2... RES FOR ALL
 DEF_RES_ALL = 10
 
-P1_RES_ALL = 5
+P1_RES_ALL = None
 P2_RES_ALL = None
 
 # SET DEFAULT/CUSTOM RES FOR EACH METHOD
@@ -222,12 +222,14 @@ MAX_COMBINATIONS = 20000
 
 # Runs AFTER EACH method
 PER_METHOD_PROCESSORS=[
-    "grid_overview",
-    "merge_qerr_instances",
-    "merge_qerr_instances_nb",
-    "instance_grid_maps",
+    "sample_grid",
+    "qerr_desc",
+    "qerr_desc_nb",
+    "selectivity_grid",
     "summarised_instances",
-    "qerr_threshold_curves"
+    "qerr_threshold_curves",
+    "qerr_grid",
+    "score_grid",
     # "neighbor_analysis",
     # "qerr_stats",
     # "plan_summary",

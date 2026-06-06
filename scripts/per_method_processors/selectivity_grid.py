@@ -1,5 +1,5 @@
 # ==========================================================
-# scripts/per_method_processors/instance_grid_maps.py
+# scripts/per_method_processors/selectivity_grid.py
 # ==========================================================
 #
 # Layout rules
@@ -404,7 +404,7 @@ def run(results_dir):
 
     df = pd.read_csv(csv_path)
 
-    outdir = results_dir / "grid_maps"
+    outdir = results_dir / "grid_selectivity"
     outdir.mkdir(parents=True, exist_ok=True)
 
     # ----------------------------------------------------------
