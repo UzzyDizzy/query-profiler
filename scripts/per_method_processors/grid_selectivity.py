@@ -1,5 +1,5 @@
 # ==========================================================
-# scripts/per_method_processors/selectivity_grid.py
+# scripts/per_method_processors/grid_selectivity.py
 # ==========================================================
 #
 # Layout rules

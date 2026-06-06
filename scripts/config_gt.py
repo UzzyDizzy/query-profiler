@@ -222,14 +222,14 @@ MAX_COMBINATIONS = 20000
 
 # Runs AFTER EACH method
 PER_METHOD_PROCESSORS=[
-    "sample_grid",
+    "grid_sample",
+    "grid_qerr",
+    "grid_score",
+    "grid_selectivity",
     "qerr_desc",
     "qerr_desc_nb",
-    "selectivity_grid",
     "summarised_instances",
     "qerr_threshold_curves",
-    "qerr_grid",
-    "score_grid",
     # "neighbor_analysis",
     # "qerr_stats",
     # "plan_summary",

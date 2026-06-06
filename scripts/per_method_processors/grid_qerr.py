@@ -1,5 +1,5 @@
 # ==========================================================
-# scripts/per_method_processors/score_grid.py
+# scripts/per_method_processors/grid_qerr.py
 # ==========================================================
 
 from pathlib import Path
@@ -190,15 +190,15 @@ def create_axis_workbook(
 
     ndim = len(x_cols)
 
-    scol = (
-        f"adjacent_score_x{axis}"
+    qcol = (
+        f"adjacent_qerr_x{axis}"
     )
 
     plan_col = (
         f"plan_change_x{axis}"
     )
 
-    if scol not in df.columns:
+    if qcol not in df.columns:
         return
 
     # ======================================================
@@ -213,7 +213,7 @@ def create_axis_workbook(
             df[x].unique()
         )
 
-        scells = []
+        qcells = []
 
         ws.cell(
             row=1,
@@ -224,7 +224,7 @@ def create_axis_workbook(
         ws.cell(
             row=1,
             column=2,
-            value="score"
+            value="qerr"
         )
 
         for i, xv in enumerate(
@@ -245,7 +245,7 @@ def create_axis_workbook(
             cell = ws.cell(
                 row=i,
                 column=2,
-                value=row[scol]
+                value=row[qcol]
             )
 
             if (
@@ -264,15 +264,15 @@ def create_axis_workbook(
 
             else:
 
-                scells.append(
+                qcells.append(
                     cell.coordinate
                 )
 
-        if scells:
+        if qcells:
 
             ws.conditional_formatting.add(
 
-                " ".join(scells),
+                " ".join(qcells),
 
                 ColorScaleRule(
 
@@ -318,7 +318,7 @@ def create_axis_workbook(
     block_w = len(xvals) + 2 + GAP
     block_h = len(yvals) + 2 + GAP
 
-    scells = []
+    qcells = []
 
     for combo, br, bc in placements:
 
@@ -402,7 +402,7 @@ def create_axis_workbook(
 
                     column=start_col + j + 1,
 
-                    value=row[scol]
+                    value=row[qcol]
 
                 )
 
@@ -422,15 +422,15 @@ def create_axis_workbook(
 
                 else:
 
-                    scells.append(
+                    qcells.append(
                         cell.coordinate
                     )
 
-    if scells:
+    if qcells:
 
         ws.conditional_formatting.add(
 
-            " ".join(scells),
+            " ".join(qcells),
 
             ColorScaleRule(
 
@@ -444,80 +444,6 @@ def create_axis_workbook(
         )
 
     wb.save(outfile)
-
-
-# ==========================================================
-# score computation
-# ==========================================================
-
-def compute_axis_qerrors(runtime_grid):
-
-    runtime_grid = np.array(runtime_grid, dtype=float)
-
-    qerr_maps = []
-
-    for axis in range(runtime_grid.ndim):
-
-        qmap = np.full(
-            runtime_grid.shape,
-            np.nan
-        )
-
-        slicer_curr = [slice(None)] * runtime_grid.ndim
-        slicer_prev = [slice(None)] * runtime_grid.ndim
-
-        slicer_curr[axis] = slice(1, None)
-        slicer_prev[axis] = slice(0, -1)
-
-        curr = runtime_grid[tuple(slicer_curr)]
-        prev = runtime_grid[tuple(slicer_prev)]
-
-        q = np.maximum(
-            curr / np.maximum(prev, 1e-9),
-            prev / np.maximum(curr, 1e-9)
-        )
-
-        qmap[tuple(slicer_curr)] = q
-
-        qerr_maps.append(qmap)
-
-    return qerr_maps
-
-
-def compute_axis_scores(runtime_grid, qerr_maps):
-
-    runtime_grid = np.array(runtime_grid, dtype=float)
-
-    score_maps = []
-
-    for axis in range(runtime_grid.ndim):
-
-        smap = np.full(
-            runtime_grid.shape,
-            np.nan
-        )
-
-        slicer_curr = [slice(None)] * runtime_grid.ndim
-        slicer_prev = [slice(None)] * runtime_grid.ndim
-
-        slicer_curr[axis] = slice(1, None)
-        slicer_prev[axis] = slice(0, -1)
-
-        curr = runtime_grid[tuple(slicer_curr)]
-        prev = runtime_grid[tuple(slicer_prev)]
-
-        q = qerr_maps[axis][tuple(slicer_curr)]
-
-        score = (
-            np.log(np.maximum(q, 1e-12))
-            * np.log1p(np.maximum(curr, prev))
-        )
-
-        smap[tuple(slicer_curr)] = score
-
-        score_maps.append(smap)
-
-    return score_maps
 
 
 # ==========================================================
@@ -556,7 +482,7 @@ def run(results_dir):
 
     outdir = (
         results_dir
-        / "grid_score"
+        / "grid_qerr"
     )
 
     outdir.mkdir(
@@ -564,66 +490,22 @@ def run(results_dir):
         exist_ok=True
     )
 
-    sort_cols = [f"x{i+1}" for i in range(len(x_cols))]
-
-    df = (
-        df
-        .sort_values(sort_cols)
-        .reset_index(drop=True)
-    )
-
-    shape = [
-        len(
-            np.sort(
-                df[p].unique()
-            )
-        )
-        for p in x_cols
-    ]
-
-    runtime_grid = (
-        df["runtime_mean"]
-        .values
-        .reshape(shape)
-    )
-
-    qerr_maps = compute_axis_qerrors(
-        runtime_grid
-    )
-
-    score_maps = compute_axis_scores(
-        runtime_grid,
-        qerr_maps
-    )
-
-    for axis in range(len(shape)):
-
-        df[f"adjacent_qerr_x{axis+1}"] = (
-            qerr_maps[axis]
-            .flatten()
-        )
-
-        df[f"adjacent_score_x{axis+1}"] = (
-            score_maps[axis]
-            .flatten()
-        )
-
     for axis in range(
         1,
         ndim + 1
     ):
 
-        scol = (
-            f"adjacent_score_x{axis}"
+        qcol = (
+            f"adjacent_qerr_x{axis}"
         )
 
-        if scol not in df.columns:
+        if qcol not in df.columns:
             continue
 
         create_axis_workbook(
 
             outdir /
-            f"axis{axis}_score.xlsx",
+            f"axis{axis}_qerr.xlsx",
 
             df,
 
@@ -637,4 +519,10 @@ def run(results_dir):
 
     print(
         f"saved: {outdir}"
+    )
+
+if __name__=="__main__":
+
+    run(
+        "gt_results_sf1_qt8_s/10x10/m3"
     )

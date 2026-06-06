@@ -1,5 +1,5 @@
 # ==========================================================
-# scripts/per_method_processors/sample_grid.py
+# scripts/per_method_processors/grid_sample.py
 # ==========================================================
 
 from pathlib import Path
