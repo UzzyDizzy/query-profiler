@@ -23,16 +23,23 @@ COMPARATOR_MODULE = "./tpch/utils/comparator.py"
 PLAN_HASH_METHOD = "structural_hash_sha256"
 
 # Parallellism Support for Query runs
-SYSTEM_WORKERS = 1 # MIN 1 
+SYSTEM_WORKERS = 5 # MIN 1 
 QUERY_WORKERS = 2 # MIN 0 / DEFAULT 2
 
 # =========================================================
 # 2. SQL source 
 # =========================================================
 
-# OPTIONAL : Input if run for 1 QUERY ONLY using "build_gt.py"!!
-# For MULTIPLE QUERY runs together use : "run_multi_gt.py"!!
+# Input if run for 1 QUERY ONLY using "build_gt.py"!!
 QUERY="qt8"
+# OPTIONAL : For MULTIPLE QUERY runs together use : "run_multi_gt.py"!!
+QUERIES=[
+    "qt5",
+    "qt7",
+    "qt8",
+    "qt10",
+    "qt16",
+]
 
 QUERY_SQL_PATH=(
     Path(__file__).resolve().parent

@@ -21,16 +21,6 @@ import config_gt
 # Config
 # ======================================
 
-QUERIES=[
-
-    "qt5",
-    "qt7",
-    "qt8",
-    "qt10",
-    "qt16",
-
-]
-
 os.environ["GT_RUN_SUFFIX"] = (
     f"_s{config_gt.SYSTEM_WORKERS}q{config_gt.QUERY_WORKERS}"
     if config_gt.SYSTEM_WORKERS != 1
@@ -210,8 +200,8 @@ def run_query(query_name):
         
         env["GT_RUN_MODE"] = "multi"
         env["GT_LOGFILE_MODE"]="1"
-        env["GT_TOTAL_QUERY_JOBS"]=str(len(QUERIES))
-        env["GT_QUERY_JOB_INDEX"]=str(QUERIES.index(query_name)+1)
+        env["GT_TOTAL_QUERY_JOBS"]=str(len(config_gt.QUERIES))
+        env["GT_QUERY_JOB_INDEX"]=str(config_gt.QUERIES.index(query_name)+1)
         env["GT_RUN_SUFFIX"] = os.environ["GT_RUN_SUFFIX"]
 
         GLOBAL_START_TS=str(time.time())
@@ -297,7 +287,7 @@ if __name__=="__main__":
     print("="*70)
     print(
         f"Running "
-        f"{len(QUERIES)} "
+        f"{len(config_gt.QUERIES)} "
         f"queries"
     )
     print(
@@ -318,7 +308,7 @@ if __name__=="__main__":
 
     ) as executor:
 
-        for q in QUERIES:
+        for q in config_gt.QUERIES:
 
             futures.append(
 
@@ -383,7 +373,7 @@ if __name__=="__main__":
             progress=(
                 completed
                 /
-                len(QUERIES)
+                len(config_gt.QUERIES)
             )
 
             if progress>0:
